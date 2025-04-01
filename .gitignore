@@ -1,0 +1,57 @@
+# Variables de entorno
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Entornos virtuales
+venv/
+env/
+ENV/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Datos y modelos
+data/raw/*
+data/processed/*
+data/embeddings/*
+models/base_model/*
+models/finetuned_model/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/embeddings/.gitkeep
+!models/base_model/.gitkeep
+!models/finetuned_model/.gitkeep
+
+# Logs
+*.log
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db 
