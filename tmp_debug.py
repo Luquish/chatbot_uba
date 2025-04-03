@@ -1,0 +1,1 @@
+from scripts.run_rag import RAGSystem; rag = RAGSystem(); query = 'Cómo te llamas?'; print(f'Query: {query}'); result = rag.process_query(query); print(f'Response: {result["response"]}'); query2 = '¿Cómo te llamas?'; print(f'Query2: {query2}'); result2 = rag.process_query(query2); print(f'Response2: {result2["response"]}')

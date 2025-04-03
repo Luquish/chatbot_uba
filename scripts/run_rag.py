@@ -558,10 +558,6 @@ class RAGSystem:
             str: Respuesta generada
         """
         try:
-            # Detectar si es un saludo simple
-            greeting_words = ['hola', 'buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias', 
-                             'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
-            
             # Lista de emojis para enriquecer las respuestas
             information_emojis = ["📚", "📖", "ℹ️", "📊", "🔍", "📝", "📋", "📈", "📌", "🧠"]
             greeting_emojis = ["👋", "😊", "🤓", "👨‍⚕️", "👩‍⚕️", "🎓", "🌟"]
@@ -572,25 +568,90 @@ class RAGSystem:
             info_emoji = information_emojis[query_hash % len(information_emojis)]
             greeting_emoji = greeting_emojis[query_hash % len(greeting_emojis)]
             
-            # Detectar si hay saludo en la consulta
-            has_greeting = any(word in query.lower().split() for word in greeting_words)
+            # Verificar si es una consulta sobre el nombre del bot
+            name_queries = [
+                "cómo te llamás", "como te llamas", "¿cómo te llamas?", "¿como te llamas?", "cómo te llamas?", "como te llamas?",
+                "cuál es tu nombre", "cual es tu nombre", "¿cuál es tu nombre?", "¿cual es tu nombre?", "cuál es tu nombre?", "cual es tu nombre?",
+                "quién eres", "quien eres", "¿quién eres?", "¿quien eres?", "quién eres?", "quien eres?",
+                "cómo te dicen", "como te dicen", "¿cómo te dicen?", "¿como te dicen?", "cómo te dicen?", "como te dicen?",
+                "tu nombre", "cómo te llaman", "como te llaman",
+                "cuál es tu apellido", "cual es tu apellido"
+            ]
             
+            # Verificación más estricta para consultas sobre el nombre
+            is_name_query = False
+            clean_query = query.lower().strip()
+            if clean_query in name_queries:
+                is_name_query = True
+            else:
+                # Si no hay coincidencia exacta, intentar coincidencia parcial
+                is_name_query = any(phrase in clean_query for phrase in name_queries)
+            
+            # Verificación adicional para "Cómo te llamas?" exactamente como en WhatsApp
+            if "cómo te llamas" in clean_query or "como te llamas" in clean_query:
+                is_name_query = True
+                
+            print(f"DEBUG - Query: '{query}', is_name_query: {is_name_query}")  # Depuración
+            
+            # Lista de palabras de saludo
+            greeting_words = ['hola', 'buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias', 
+                              'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
+            
+            # Identificar si hay un saludo en la consulta
+            has_greeting = False
+            greeting_used = None
+            for word in greeting_words:
+                if word in query.lower().strip().split() or query.lower().strip().startswith(word):
+                    has_greeting = True
+                    greeting_used = word
+                    break
+            
+            # Caso especial para "buenas" que puede estar al inicio sin espacio
+            if not has_greeting and (query.lower().strip().startswith('buenas')):
+                has_greeting = True
+                greeting_used = 'buenas'
+            
+            # Determinar si es solo un saludo sin pregunta
             is_greeting_only = query.lower().strip() in greeting_words or any(
                 query.lower().strip() == word or query.lower().strip().startswith(word + " ")
                 for word in greeting_words
             )
             
-            # Si es solo un saludo, responder sin información adicional
+            # Determinar el saludo a usar en la respuesta si hay uno en la consulta
+            greeting_prefix = ""
+            if has_greeting:
+                if greeting_used in ['hola', 'saludos']:
+                    greeting_prefix = f"👨‍⚕️ ¡Hola! Soy DrCecim. "
+                elif greeting_used in ['buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias']:
+                    greeting_prefix = f"👨‍⚕️ ¡Buenos días! Soy DrCecim. "
+                elif greeting_used == 'buenas tardes':
+                    greeting_prefix = f"👨‍⚕️ ¡Buenas tardes! Soy DrCecim. "
+                elif greeting_used == 'buenas noches':
+                    greeting_prefix = f"👨‍⚕️ ¡Buenas noches! Soy DrCecim. "
+                elif greeting_used in ['qué tal', 'que tal', 'cómo va', 'como va']:
+                    greeting_prefix = f"👨‍⚕️ ¿Cómo va? Soy DrCecim. "
+                else:
+                    greeting_prefix = f"👨‍⚕️ ¡Buenas! Soy DrCecim. "
+            else:
+                greeting_prefix = f"👨‍⚕️ "
+            
+            # Si es solo un saludo, responder directamente sin buscar embeddings
             if is_greeting_only:
                 greeting_responses = [
-                    f"👨‍⚕️ ¡Hola! Soy DrCecim, tu asistente académico. ¿En qué puedo ayudarte hoy?",
-                    f"👨‍⚕️ Saludos, soy DrCecim de la Facultad de Medicina. ¿Necesitas información sobre algo específico?",
+                    f"👨‍⚕️ ¡Hola! Soy DrCecim, tu asistente de la Facultad de Medicina. ¿En qué puedo ayudarte hoy?",
                     f"👨‍⚕️ ¡Buenas! Soy DrCecim, ¿en qué puedo asistirte hoy?",
+                    f"👨‍⚕️ ¿Cómo va? Soy DrCecim, tu asistente académico. ¿Con qué puedo ayudarte?",
                     f"👨‍⚕️ Hola, soy DrCecim. ¿En qué puedo orientarte hoy?",
-                    f"👨‍⚕️ Saludos. Soy DrCecim, tu asesor académico. ¿Necesitas ayuda con algún tema en particular?"
+                    f"👨‍⚕️ Saludos. Soy DrCecim, ¿necesitas ayuda con algún tema en particular?",
+                    f"👨‍⚕️ ¡Buen día! Soy DrCecim, asistente de la Facultad de Medicina. ¿En qué puedo colaborar?"
                 ]
                 import random
-                return random.choice(greeting_responses)
+                return {
+                    "query": query,
+                    "response": random.choice(greeting_responses),
+                    "relevant_chunks": [],
+                    "sources": []
+                }
             
             if not context or context.strip() == "":
                 # Respuesta para cuando no hay contexto relevante
@@ -638,30 +699,6 @@ class RAGSystem:
             else:
                 sources_context = ""
             
-            # Determinar saludos y prefijos en función de si hay saludo en la consulta
-            greeting_used = None
-            if has_greeting:
-                for word in greeting_words:
-                    if word in query.lower().split():
-                        greeting_used = word
-                        break
-            
-            # Determinar el saludo específico a usar en la respuesta
-            greeting_prefix = ""
-            if has_greeting:
-                if greeting_used in ['hola', 'saludos']:
-                    greeting_prefix = f"👨‍⚕️ ¡Hola! Soy DrCecim. "
-                elif greeting_used in ['buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias']:
-                    greeting_prefix = f"👨‍⚕️ ¡Buenos días! Soy DrCecim. "
-                elif greeting_used == 'buenas tardes':
-                    greeting_prefix = f"👨‍⚕️ ¡Buenas tardes! Soy DrCecim. "
-                elif greeting_used == 'buenas noches':
-                    greeting_prefix = f"👨‍⚕️ ¡Buenas noches! Soy DrCecim. "
-                else:
-                    greeting_prefix = f"👨‍⚕️ ¡Hola! Soy DrCecim. "
-            else:
-                greeting_prefix = f"👨‍⚕️ "
-            
             # Instrucción específica para el saludo
             greeting_instruction = ""
             if has_greeting:
@@ -671,6 +708,13 @@ class RAGSystem:
             
             # Aplicar técnicas de prompt engineering de Mistral AI
             system_prompt = f"""Eres un asistente virtual especializado, llamado DrCecim, de la Facultad de Medicina de la Universidad de Buenos Aires.
+
+### ADVERTENCIA EXTREMADAMENTE IMPORTANTE:
+NUNCA GENERES PREGUNTAS Y RESPUESTAS. RESPONDE SOLO Y EXCLUSIVAMENTE A LA CONSULTA DEL USUARIO. SOLO GENERA UNA ÚNICA RESPUESTA. NO CREES DIÁLOGOS, NI CONVERSACIONES, NI INTERACCIONES ADICIONALES.
+
+### INSTRUCCIÓN SOBRE SALUDOS - MUY IMPORTANTE:
+La consulta del usuario {'' if has_greeting else 'NO'} contiene un saludo.
+{'DEBES iniciar tu respuesta incluyendo "Soy DrCecim" en tu saludo.' if has_greeting else 'NO debes mencionar tu nombre "DrCecim" en tu respuesta.'}
 
 ### Instrucciones de Formato:
 1. Usa un tono amable y profesional.
@@ -695,27 +739,19 @@ class RAGSystem:
 - Suspensión de uno a cinco años ⚠️
 - Expulsión definitiva ⚠️
 
-Cualquier información adicional debe ir en párrafos separados, nunca en la misma línea del ítem.
+### {'Ejemplos de respuestas CON saludo:' if has_greeting else 'Ejemplos de respuestas SIN saludo:'}
+{'👨‍⚕️ ¡Buenas! Soy DrCecim. Las sanciones que se pueden aplicar son...' if has_greeting else '👨‍⚕️ Las sanciones que se pueden aplicar son...'}
+{'👨‍⚕️ ¿Cómo va? Soy DrCecim. La información que solicitaste es...' if has_greeting else '👨‍⚕️ La información que solicitaste es...'}
 
-### Ejemplos INCORRECTOS (NUNCA USAR):
-- Apercibimiento ⚠️ que se aplica en casos leves
-- Suspensión ⚠️ para casos más graves
-
-### Comportamiento con saludos:
-Si el usuario te saluda con palabras como "hola", "buenos días", etc., responde con:
-"👨‍⚕️ ¡Hola! Soy DrCecim, tu asistente de la Facultad de Medicina. ¿En qué puedo ayudarte hoy?"
-
-Si el usuario NO te saluda, NUNCA menciones tu nombre "DrCecim" y comienza directamente con:
-"👨‍⚕️ " seguido de la información solicitada.
-
-### Instrucciones específicas:
-{greeting_instruction}
-Si la consulta NO incluye un saludo, NO añadas un saludo a tu respuesta.
-Al hablar de tus capacidades, usa "Puedo ayudarte con..." o "Me puedes consultar sobre..." (NUNCA "Te puedo consultar").
-SIEMPRE menciona "Facultad de Medicina" y no solo "Universidad de Buenos Aires".
-NO INVENTES preguntas y respuestas adicionales que no son parte de la consulta original.
-RESPONDE ÚNICAMENTE a la consulta del usuario, sin agregar información no solicitada.
-Mantén tus respuestas BREVES y DIRECTAS.
+### REGLAS CRÍTICAS - LEE ESTO CUIDADOSAMENTE:
+1. SOLO RESPONDE UNA VEZ A LA PREGUNTA ESPECÍFICA DEL USUARIO. NO GENERES NINGUNA PREGUNTA NI RESPUESTA ADICIONAL.
+2. NO CREES DIÁLOGOS FICTICIOS BAJO NINGUNA CIRCUNSTANCIA.
+3. NO INVENTES PREGUNTAS. SI VES QUE ESTÁS CREANDO UNA PREGUNTA, DETENTE INMEDIATAMENTE.
+4. NO RESPONDAS A PREGUNTAS QUE EL USUARIO NO TE HA HECHO EXPLÍCITAMENTE.
+5. SOLO PROPORCIONA INFORMACIÓN DIRECTAMENTE RELACIONADA CON LA CONSULTA DEL USUARIO.
+6. NO INCLUYAS NINGUNA PREGUNTA EN TU RESPUESTA.
+7. CADA MENSAJE TUYO DEBE CONTENER UNA ÚNICA RESPUESTA CONCISA.
+8. NUNCA CREES TEXTO QUE EMPIECE CON SIGNOS DE INTERROGACIÓN (¿).
 
 <contexto>
 {context}
@@ -725,7 +761,7 @@ Mantén tus respuestas BREVES y DIRECTAS.
 {query}
 </consulta>
 
-Responde ÚNICAMENTE con información del contexto. NUNCA inventes información que no esté presente en el contexto."""
+Responde ÚNICAMENTE a la consulta con información del contexto. SOLO GENERA UNA RESPUESTA. NO HAGAS PREGUNTAS."""
             
             user_prompt = f"Responde de manera directa y concisa a la consulta. Si necesitas hacer una lista, usa EXACTAMENTE el formato indicado en las instrucciones."
             
@@ -738,6 +774,29 @@ Responde ÚNICAMENTE con información del contexto. NUNCA inventes información 
             response = re.sub(r'(Según el contexto|Basado en el contexto|De acuerdo con el contexto|Como se menciona en el contexto|Respuesta:|Según la información proporcionada)', '', response, flags=re.IGNORECASE)
             response = re.sub(r'<[^>]*>', '', response)  # Eliminar etiquetas HTML
             response = response.strip()
+            
+            # Eliminar preguntas autogeneradas y sus respuestas
+            # Esto dividirá la respuesta en la primera oración que termine con punto 
+            # o en el primer párrafo, lo que sea más corto
+            # Buscar la primera pregunta (si existe) y cortar todo lo que sigue
+            question_pattern = r'(?:\n|^)(?:\?|¿).*\?'
+            match = re.search(question_pattern, response)
+            if match:
+                response = response[:match.start()]
+                
+            # Si después de eliminar preguntas, queda una respuesta con párrafos múltiples
+            # mantener solo el primer párrafo relevante
+            paragraphs = re.split(r'\n\s*\n', response)
+            if len(paragraphs) > 1:
+                # Mantener el primer párrafo (respuesta principal) y cualquier lista que pueda seguir
+                main_content = paragraphs[0]
+                if '- ' in main_content or main_content.strip().endswith(':'):
+                    # Si el primer párrafo contiene una lista o termina con dos puntos,
+                    # incluir también el siguiente párrafo que probablemente contiene la lista
+                    for p in paragraphs[1:]:
+                        if p.strip().startswith('- '):
+                            main_content += '\n\n' + p
+                response = main_content
             
             # Asegurar que las listas usen guiones y no bullets
             response = response.replace('• ', '- ')
@@ -780,11 +839,19 @@ Responde ÚNICAMENTE con información del contexto. NUNCA inventes información 
             if not response.startswith("👨‍⚕️"):
                 response = "👨‍⚕️ " + response.lstrip()
             
-            # Si no es un saludo, eliminar cualquier mención a DrCecim
-            if not has_greeting:
-                response = re.sub(r'(?i)(Soy DrCecim\.?|DrCecim aquí\.?|DrCecim:)\s*', '', response)
+            # Asegurar que la respuesta tenga el formato adecuado con el saludo correcto
+            if has_greeting and "DrCecim" not in response and not response.startswith(greeting_prefix):
+                if response.startswith("👨‍⚕️"):
+                    # Si ya empieza con el emoji, reemplazar con el greeting_prefix completo
+                    response = greeting_prefix + response[5:].lstrip()
+                else:
+                    response = greeting_prefix + response
+            elif not has_greeting and "DrCecim" in response:
+                # Si no hay saludo, eliminar menciones a DrCecim
+                response = re.sub(r'(?i)(Soy DrCecim\.?|DrCecim aquí\.?|DrCecim:)\s*', f'👨‍⚕️ ', response)
+                
                 # También eliminar saludos si no hubo saludo en la consulta
-                response = re.sub(r'(?i)(¡Hola!|Hola,|Buenos días|Buenas tardes|Buenas noches|Saludos)\s*', '', response)
+                response = re.sub(r'(?i)(¡Hola!|Hola,|¡Buenos días!|Buenos días|¡Buenas tardes!|Buenas tardes|¡Buenas noches!|Buenas noches|Saludos|¡Buenas!|Buenas,)\s*', '', response)
             
             # Eliminar líneas vacías duplicadas
             response = re.sub(r'\n\s*\n+', '\n\n', response)
@@ -820,18 +887,111 @@ Responde ÚNICAMENTE con información del contexto. NUNCA inventes información 
             info_emoji = information_emojis[query_hash % len(information_emojis)]
             greeting_emoji = greeting_emojis[query_hash % len(greeting_emojis)]
             
-            # Detectar si contiene un saludo
+            # Lista de palabras de saludo
             greeting_words = ['hola', 'buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias', 
-                             'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
+                              'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
             
-            # Identificar si hay un saludo en la consulta
+            # Verificar si es una consulta sobre el nombre del bot
+            name_queries = [
+                "cómo te llamás", "como te llamas", "¿cómo te llamas?", "¿como te llamas?", "cómo te llamas?", "como te llamas?",
+                "cuál es tu nombre", "cual es tu nombre", "¿cuál es tu nombre?", "¿cual es tu nombre?", "cuál es tu nombre?", "cual es tu nombre?",
+                "quién eres", "quien eres", "¿quién eres?", "¿quien eres?", "quién eres?", "quien eres?",
+                "cómo te dicen", "como te dicen", "¿cómo te dicen?", "¿como te dicen?", "cómo te dicen?", "como te dicen?",
+                "tu nombre", "cómo te llaman", "como te llaman",
+                "cuál es tu apellido", "cual es tu apellido"
+            ]
+            
+            # Verificación más estricta para consultas sobre el nombre
+            is_name_query = False
+            clean_query = query.lower().strip()
+            if clean_query in name_queries:
+                is_name_query = True
+            else:
+                # Si no hay coincidencia exacta, intentar coincidencia parcial
+                is_name_query = any(phrase in clean_query for phrase in name_queries)
+            
+            # Verificación adicional para "Cómo te llamas?" exactamente como en WhatsApp
+            if "cómo te llamas" in clean_query or "como te llamas" in clean_query:
+                is_name_query = True
+                
+            print(f"DEBUG - Query: '{query}', is_name_query: {is_name_query}")  # Depuración
+            
+            # Si pregunta por el nombre, responder directamente
+            if is_name_query:
+                name_response = f"👨‍⚕️ Me llamo DrCecim. Soy un asistente virtual especializado en información académica de la Facultad de Medicina de la Universidad de Buenos Aires."
+                
+                return {
+                    "query": query,
+                    "response": name_response,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # 2. SEGUNDO: Verificar si es una consulta sobre las capacidades del bot
+            meta_queries = [
+                "qué hace", "que hace", "qué podés hacer", "que podes hacer",
+                "en qué me podés ayudar", "en que me podes ayudar",
+                "cómo me podés ayudar", "como me podes ayudar",
+                "qué información tenés", "que informacion tenes",
+                "qué información conocés", "que informacion conoces",
+                "qué sabés", "que sabes", "para qué servís", "para que servis",
+                "qué tipo de consulta", "que tipo de consulta",
+                "qué tipo de información", "que tipo de informacion",
+                "qué tipo de preguntas", "que tipo de preguntas",
+                "qué consultas puedo hacer", "que consultas puedo hacer",
+                "qué me podés decir", "que me podes decir",
+                "qué puedo consultarte", "que puedo consultarte",
+                "qué servicios ofrece", "que servicios ofrece",
+                "cuáles son tus funciones", "cuales son tus funciones",
+                "sobre qué temas", "sobre que temas", "qué temas", "que temas",
+                "temas de consulta", "qué materias", "que materias",
+                "de qué me podés informar", "de que me podes informar", "qué me puedes informar",
+                "sobre qué podés ayudarme", "sobre que podes ayudarme",
+                "qué me puedes informar", "que puedes decirme", "qué puedes decirme", 
+                "que puedo preguntarte", "qué puedo preguntarte"
+            ]
+            
+            # Mejor detección de meta-queries
+            is_meta_query = False
+            clean_query = query.lower().strip()
+            
+            # Comprobar coincidencia exacta primero
+            if clean_query in meta_queries:
+                is_meta_query = True
+            else:
+                # Si no hay coincidencia exacta, buscar coincidencias parciales
+                for phrase in meta_queries:
+                    if phrase in clean_query:
+                        is_meta_query = True
+                        break
+                        
+                # Verificación adicional para consultas como "¿Qué me puedes informar?"
+                if re.search(r'(?:qué|que).*(?:pued(?:o|es)|pod(?:és|es)).*(?:informar|ayudar|consultar|preguntar)', clean_query):
+                    is_meta_query = True
+            
+            if is_meta_query:
+                meta_response = f"👨‍⚕️ Puedo ayudarte con consultas sobre:\n- Reglamento académico de la Facultad de Medicina 📚\n- Condiciones de regularidad para alumnos 📋\n- Régimen disciplinario y sanciones 🎓\n- Trámites administrativos para estudiantes 📄\n- Requisitos académicos y normativas 📌"
+                
+                return {
+                    "query": query,
+                    "response": meta_response,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # 3. TERCERO: Identificar si hay un saludo en la consulta
             has_greeting = False
             greeting_used = None
             for word in greeting_words:
-                if word in query.lower().split():
+                if word in query.lower().split() or query.lower().strip().startswith(word):
                     has_greeting = True
                     greeting_used = word
                     break
+            
+            # Caso especial para "buenas" que puede estar al inicio sin espacio
+            if not has_greeting and (query.lower().strip().startswith('buenas')):
+                has_greeting = True
+                greeting_used = 'buenas'
             
             # Determinar si es solo un saludo sin pregunta
             is_greeting_only = query.lower().strip() in greeting_words or any(
@@ -850,19 +1010,22 @@ Responde ÚNICAMENTE con información del contexto. NUNCA inventes información 
                     greeting_prefix = f"👨‍⚕️ ¡Buenas tardes! Soy DrCecim. "
                 elif greeting_used == 'buenas noches':
                     greeting_prefix = f"👨‍⚕️ ¡Buenas noches! Soy DrCecim. "
+                elif greeting_used in ['qué tal', 'que tal', 'cómo va', 'como va']:
+                    greeting_prefix = f"👨‍⚕️ ¿Cómo va? Soy DrCecim. "
                 else:
-                    greeting_prefix = f"👨‍⚕️ ¡Hola! Soy DrCecim. "
+                    greeting_prefix = f"👨‍⚕️ ¡Buenas! Soy DrCecim. "
             else:
                 greeting_prefix = f"👨‍⚕️ "
             
             # Si es solo un saludo, responder directamente sin buscar embeddings
             if is_greeting_only:
                 greeting_responses = [
-                    f"👨‍⚕️ ¡Hola! Soy DrCecim, tu asistente académico. ¿En qué puedo ayudarte hoy?",
-                    f"👨‍⚕️ Saludos, soy DrCecim de la Facultad de Medicina. ¿Necesitas información sobre algo específico?",
+                    f"👨‍⚕️ ¡Hola! Soy DrCecim, tu asistente de la Facultad de Medicina. ¿En qué puedo ayudarte hoy?",
                     f"👨‍⚕️ ¡Buenas! Soy DrCecim, ¿en qué puedo asistirte hoy?",
+                    f"👨‍⚕️ ¿Cómo va? Soy DrCecim, tu asistente académico. ¿Con qué puedo ayudarte?",
                     f"👨‍⚕️ Hola, soy DrCecim. ¿En qué puedo orientarte hoy?",
-                    f"👨‍⚕️ Saludos. Soy DrCecim, tu asesor académico. ¿Necesitas ayuda con algún tema en particular?"
+                    f"👨‍⚕️ Saludos. Soy DrCecim, ¿necesitas ayuda con algún tema en particular?",
+                    f"👨‍⚕️ ¡Buen día! Soy DrCecim, asistente de la Facultad de Medicina. ¿En qué puedo colaborar?"
                 ]
                 import random
                 return {
@@ -872,33 +1035,7 @@ Responde ÚNICAMENTE con información del contexto. NUNCA inventes información 
                     "sources": []
                 }
             
-            # Verificar si es una consulta sobre las capacidades del bot
-            meta_queries = [
-                "qué hace", "que hace", "qué podés hacer", "que podes hacer",
-                "en qué me podés ayudar", "en que me podes ayudar",
-                "cómo me podés ayudar", "como me podes ayudar",
-                "qué información tenés", "que informacion tenes",
-                "qué información conocés", "que informacion conoces",
-                "qué sabés", "que sabes", "para qué servís", "para que servis"
-            ]
-            is_meta_query = any(phrase in query.lower() for phrase in meta_queries)
-            
-            # Si es una pregunta sobre las capacidades del bot, no usar embeddings
-            if is_meta_query:
-                # Respuesta personalizada sobre capacidades
-                if has_greeting:
-                    meta_response = f"{greeting_prefix}Soy un asistente virtual especializado en información académica de la Facultad de Medicina de la Universidad de Buenos Aires. Puedo ayudarte con consultas sobre:\n- Condiciones de regularidad en la Facultad de Medicina 📚\n- Trámites administrativos para estudiantes de medicina 📋\n- Fechas importantes del calendario académico 🗓️\n- Requisitos de las materias y plan de estudios 📌\n- Información sobre el régimen disciplinario 🎓\n- Procedimientos de readmisión y sanciones 📄"
-                else:
-                    meta_response = f"👨‍⚕️ Puedo ayudarte con consultas sobre:\n- Condiciones de regularidad en la Facultad de Medicina 📚\n- Trámites administrativos para estudiantes de medicina 📋\n- Fechas importantes del calendario académico 🗓️\n- Requisitos de las materias y plan de estudios 📌\n- Información sobre el régimen disciplinario 🎓\n- Procedimientos de readmisión y sanciones 📄"
-                
-                return {
-                    "query": query,
-                    "response": meta_response,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
-                
-            # Para preguntas normales, seguir el flujo habitual de RAG
+            # 5. QUINTO: Para preguntas normales, seguir el flujo habitual de RAG
             if num_chunks is None:
                 num_chunks = int(os.getenv('RAG_NUM_CHUNKS', 3))
             
@@ -1000,7 +1137,12 @@ Responde ÚNICAMENTE con información del contexto. NUNCA inventes información 
             
             # Asegurar que la respuesta tenga el formato adecuado
             if has_greeting and "DrCecim" not in response:
-                response = f"{greeting_prefix}{response}"
+                # Verificar si la respuesta ya tiene el emoji del doctor
+                if response.startswith("👨‍⚕️"):
+                    # Reemplazar el emoji con el saludo completo
+                    response = greeting_prefix + response[5:].lstrip()
+                else:
+                    response = greeting_prefix + response
             elif not has_greeting and "DrCecim" in response:
                 # Si no hay saludo, eliminar menciones a DrCecim
                 response = re.sub(r'(?i)(Soy DrCecim\.?|DrCecim aquí\.?|DrCecim:)\s*', f'👨‍⚕️ ', response)
@@ -1008,12 +1150,30 @@ Responde ÚNICAMENTE con información del contexto. NUNCA inventes información 
             if not any(emoji in response for emoji in information_emojis + greeting_emojis):
                 response = f"{response} {info_emoji}"
             
+            # Agregar fuente de información si hay sources
+            final_response = response
+            if sources and len(sources) > 0:
+                # Limpiar nombres de fuentes (quitar .pdf, guiones bajos, etc.)
+                clean_sources = []
+                for source in sources:
+                    # Reemplazar guiones bajos y guiones con espacios
+                    clean_source = source.replace('_', ' ').replace('-', ' ')
+                    clean_sources.append(clean_source)
+                
+                # Agregar fuente al final del mensaje
+                if len(clean_sources) == 1:
+                    final_response = f"{response}\n\nEsta información la puedes encontrar en: {clean_sources[0]}"
+                else:
+                    sources_text = ", ".join(clean_sources)
+                    final_response = f"{response}\n\nEsta información la puedes encontrar en: {sources_text}"
+            
             return {
                 "query": query,
-                "response": response,
+                "response": final_response,
                 "relevant_chunks": relevant_chunks,
                 "sources": sources
             }
+            
         except Exception as e:
             logger.error(f"Error en process_query: {str(e)}", exc_info=True)
             if has_greeting:
