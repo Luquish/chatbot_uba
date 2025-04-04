@@ -335,12 +335,13 @@ async def whatsapp_webhook(request: Request):
             changes = entry["changes"][0]
             value = changes["value"]
             
+            # Si tenemos un mensaje o cualquier evento, reenviamos al backend
             if "messages" in value:
-                message = value["messages"][0]
-                
-                # Extraer información del mensaje
+                message = value.get("messages", [])[0]
                 message_body = message.get("text", {}).get("body", "")
                 from_number = message.get("from", "")
+                message_id = message.get("id", "")
+                logger.info(f"Mensaje nuevo recibido - ID: {message_id}, De: {from_number}, Contenido: '{message_body}'")
                 
                 # Normalizar el número del remitente
                 whatsapp_handler = get_whatsapp_handler()
@@ -365,6 +366,25 @@ async def whatsapp_webhook(request: Request):
                     "message": "Respuesta enviada",
                     "details": send_result
                 }
+            elif "statuses" in value:
+                status = value.get("statuses", [])[0]
+                status_type = status.get("status")
+                message_id = status.get("id")
+                recipient = status.get("recipient_id")
+                
+                if status_type == "sent":
+                    logger.debug(f"✓ Mensaje {message_id} enviado a {recipient}")
+                elif status_type == "delivered":
+                    logger.debug(f"✓✓ Mensaje {message_id} entregado a {recipient}")
+                elif status_type == "read":
+                    logger.debug(f"✓✓✓ Mensaje {message_id} leído por {recipient}")
+                else:
+                    logger.debug(f"Estado desconocido para mensaje {message_id}: {status_type}")
+                
+                return {"status": "success", "message": f"Estado {status_type} procesado"}
+            else:
+                logger.warning("Webhook recibido sin mensajes ni estados")
+                return {"status": "ignored", "message": "Webhook sin contenido procesable"}
                 
         except (KeyError, IndexError) as e:
             logger.error(f"Error al procesar entrada: {str(e)}")
@@ -542,23 +562,21 @@ async def receive_whatsapp_message(request: Request):
     Este endpoint es llamado por el webhook de Glitch cuando recibe un mensaje.
     """
     # Agregar log de entrada para confirmar que se está llamando al endpoint
-    print("\n\n======= MENSAJE RECIBIDO EN /api/whatsapp/message =======\n\n")
-    logger.warning("======= MENSAJE RECIBIDO EN /api/whatsapp/message =======")
+    logger.info("======= MENSAJE RECIBIDO EN /api/whatsapp/message =======")
     
     try:
         # Log de headers y query params para depuración
-        print(f"Headers: {dict(request.headers)}")
-        logger.warning(f"Headers: {dict(request.headers)}")
+        logger.debug(f"Headers: {dict(request.headers)}")
         
         # Obtener datos del mensaje como texto para depuración
         body_bytes = await request.body()
         body_text = body_bytes.decode('utf-8')
-        print(f"Cuerpo RAW: {body_text}")
+        logger.debug(f"Cuerpo RAW: {body_text}")
         
         # Obtener datos del mensaje
         try:
             data = await request.json()
-            print(f"Datos JSON recibidos: {json.dumps(data, indent=2)}")
+            logger.debug(f"Datos JSON recibidos: {json.dumps(data, indent=2)}")
         except Exception as e:
             logger.error(f"Error al leer el cuerpo de la solicitud: {str(e)}")
             return {"status": "error", "message": f"Error en JSON: {str(e)}", "body": body_text}
@@ -570,7 +588,7 @@ async def receive_whatsapp_message(request: Request):
         # Verificar si estamos recibiendo el webhook completo o solo el mensaje simplificado
         if "object" in data and data.get("object") == "whatsapp_business_account":
             # Formato webhook completo
-            print("Detectado formato de webhook completo")
+            logger.debug("Detectado formato de webhook completo")
             try:
                 entry = data.get("entry", [])[0]
                 changes = entry.get("changes", [])[0]
@@ -585,14 +603,13 @@ async def receive_whatsapp_message(request: Request):
                     # Extraer ID del número de teléfono de negocio desde metadata
                     business_phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
                     
-                    print(f"Webhook completo - De: {from_number}, Mensaje: '{message_body}'")
+                    logger.info(f"Webhook completo - De: {from_number}, Mensaje: '{message_body}'")
                 else:
                     # Puede ser un mensaje de estado (read, delivered, etc)
-                    print("Evento de estado recibido, no es un mensaje de texto")
+                    logger.debug("Evento de estado recibido, no es un mensaje de texto")
                     return {"status": "ignored", "message": "Evento de estado, no es un mensaje"}
             except (IndexError, KeyError) as e:
-                print(f"Error al extraer datos del webhook completo: {str(e)}")
-                logger.error(f"Error al extraer datos del webhook: {str(e)}")
+                logger.error(f"Error al extraer datos del webhook completo: {str(e)}")
                 return {"status": "error", "message": f"Error en estructura de webhook: {str(e)}"}
         else:
             # Formato simplificado que envía server.js actualmente
@@ -603,26 +620,29 @@ async def receive_whatsapp_message(request: Request):
                 from_number = message.get("from", "")
             
             business_phone_number_id = data.get("business_phone_number_id", "")
-            print(f"Formato simplificado - De: {from_number}, Mensaje: '{message_body}'")
+            logger.info(f"Formato simplificado - De: {from_number}, Mensaje: '{message_body}'")
         
         # Log de los datos extraídos
-        print(f"Mensaje extraído - De: {from_number}, Cuerpo: '{message_body}'")
-        logger.warning(f"Mensaje de: {from_number}, Contenido: '{message_body}'")
+        logger.info(f"Mensaje extraído - De: {from_number}, Cuerpo: '{message_body}'")
         
         if not message_body or not from_number:
-            print("Error: Mensaje sin cuerpo o remitente")
-            logger.warning("Mensaje recibido sin cuerpo o remitente")
+            logger.error("Error: Mensaje sin cuerpo o remitente")
             return {"status": "error", "message": "Datos incompletos", "received_data": data}
         
         # Normalizar el número del remitente
         whatsapp_handler = get_whatsapp_handler()
         from_number = whatsapp_handler.normalize_phone_number(from_number)
-        logger.warning(f"Número normalizado: {from_number}")
+        logger.info(f"Número normalizado: {from_number}")
         
-        # Respuesta simple sin usar RAG para verificar que la comunicación funciona
-        print("Enviando respuesta simple directa...")
-        logger.warning("Enviando respuesta simple directa...")
-        response_text = f"Hola! Recibí tu mensaje: '{message_body}'. [Respuesta de prueba]"
+        # Procesar el mensaje usando RAG
+        try:
+            logger.info(f"Procesando mensaje con RAG: '{message_body}'")
+            result = rag_system.process_query(message_body)
+            response_text = result["response"]
+            logger.info(f"Respuesta RAG generada: {response_text}")
+        except Exception as e:
+            logger.error(f"Error al procesar con RAG: {str(e)}")
+            response_text = "Lo siento, tuve un problema procesando tu mensaje. Por favor, intenta de nuevo más tarde."
         
         # Enviar respuesta por WhatsApp
         try:
@@ -630,22 +650,20 @@ async def receive_whatsapp_message(request: Request):
                 from_number,
                 response_text
             )
-            print(f"Resultado del envío: {json.dumps(send_result, indent=2)}")
+            logger.debug(f"Resultado del envío: {json.dumps(send_result, indent=2)}")
             
             return {
                 "status": "success",
-                "message": "Respuesta de prueba enviada",
+                "message": "Respuesta enviada correctamente",
                 "response_text": response_text,
                 "details": send_result
             }
         except Exception as e:
-            print(f"Error al enviar: {str(e)}")
-            logger.error(f"Error al enviar mensaje: {str(e)}", exc_info=True)
+            logger.error(f"Error al enviar: {str(e)}")
             return {"status": "error", "message": f"Error al enviar: {str(e)}"}
         
     except Exception as e:
-        print(f"Error general: {str(e)}")
-        logger.error(f"Error al procesar mensaje de Glitch: {str(e)}", exc_info=True)
+        logger.error(f"Error general: {str(e)}")
         import traceback
         return {
             "status": "error", 
