@@ -1,138 +1,112 @@
-# Chatbot UBA Medicina
+# UBA Medicine Chatbot
 
-Chatbot educativo para la Facultad de Medicina de la UBA, diseñado para asistir a aproximadamente 127,000 estudiantes con consultas administrativas.
+An educational chatbot for the Faculty of Medicine of the University of Buenos Aires (UBA). This project implements a WhatsApp-based chatbot that uses RAG (Retrieval Augmented Generation) to provide accurate and contextual responses to medical education queries.
 
-## Estructura del Proyecto
+## Features
 
-El proyecto está organizado en los siguientes scripts principales:
+- WhatsApp Business API integration
+- RAG-based response generation
+- Fine-tuned language model
+- Automatic setup and deployment
+- Robust error handling
+- Detailed logging
 
-1. **Preprocesamiento de Datos** (`scripts/preprocess.py`):
-   - Extrae texto de documentos PDF
-   - Limpia y segmenta el texto
-   - Prepara los datos para la generación de embeddings
+## Project Structure
 
-2. **Generación de Embeddings** (`scripts/create_embeddings.py`):
-   - Crea embeddings vectoriales del texto procesado
-   - Almacena los embeddings en FAISS para desarrollo
-   - Utiliza Pinecone para producción
-
-3. **Fine-tuning del Modelo** (`scripts/train_finetune.py`):
-   - Adapta el modelo base usando técnicas LoRA/QLoRA
-   - Optimiza el modelo para el dominio específico
-
-4. **Sistema RAG** (`scripts/run_rag.py`):
-   - Maneja consultas de usuarios
-   - Recupera información relevante
-   - Genera respuestas contextuales
-
-5. **Backend y API** (`scripts/deploy_backend.py`):
-   - Implementa el backend con FastAPI
-   - Gestiona la integración con WhatsApp Business API
-
-## Configuración
-
-### Variables de Entorno
-
-Crear un archivo `.env` con las siguientes variables:
-
-```env
-# Entorno
-ENVIRONMENT=development  # o production
-
-# WhatsApp Business API
-WHATSAPP_API_TOKEN=your_api_token
-WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
-WHATSAPP_BUSINESS_ACCOUNT_ID=your_business_account_id
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_webhook_verify_token
-
-# Número de teléfono para pruebas
-MY_PHONE_NUMBER=your_test_phone_number
-
-# Modelo y embeddings
-MODEL_PATH=models/finetuned_model
-EMBEDDINGS_DIR=data/embeddings
-
-# Servidor
-HOST=0.0.0.0
-PORT=8000
+```
+.
+├── data/
+│   ├── raw/           # Raw data files
+│   ├── processed/     # Processed data
+│   └── embeddings/    # Generated embeddings
+├── models/            # Model files
+├── scripts/           # Python scripts
+│   ├── auto_setup.py  # Automatic setup
+│   ├── create_embeddings.py  # Embedding generation
+│   ├── deploy_backend.py     # Backend deployment
+│   ├── preprocess.py  # Data preprocessing
+│   ├── run_rag.py     # RAG system
+│   └── train_finetune.py  # Model fine-tuning
+└── logs/              # Log files
 ```
 
-### Configuración de WhatsApp
+## Setup
 
-1. Crear una cuenta de negocio en [Meta Business Manager](https://business.facebook.com/)
-2. Configurar la API de WhatsApp Business:
-   - Obtener el token de acceso
-   - Registrar el número de teléfono
-   - Obtener el ID del número de teléfono
-   - Obtener el ID de la cuenta de negocio
-
-3. Configurar el webhook:
-   - URL: `https://tu-dominio.com/webhook/whatsapp`
-   - Token de verificación: usar el valor de `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
-   - Eventos a suscribir:
-     - messages
-     - message_template_status_updates
-
-## Instalación
-
-1. Clonar el repositorio:
+1. Clone the repository:
 ```bash
-git clone https://github.com/tu-usuario/chatbot_uba.git
+git clone https://github.com/yourusername/chatbot_uba.git
 cd chatbot_uba
 ```
 
-2. Crear y activar un entorno virtual:
+2. Run the automatic setup:
 ```bash
-python -m venv venv
-source venv/bin/activate  # En Windows: venv\Scripts\activate
+python scripts/auto_setup.py
 ```
 
-3. Instalar dependencias:
-```bash
-pip install -r requirements.txt
+3. Configure environment variables in `.env`:
+```
+ENVIRONMENT=development
+MODEL_PATH=models/finetuned_model
+EMBEDDINGS_DIR=data/embeddings
+WHATSAPP_API_TOKEN=your_token
+WHATSAPP_PHONE_NUMBER_ID=your_phone_id
+WHATSAPP_BUSINESS_ACCOUNT_ID=your_account_id
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_verify_token
+MY_PHONE_NUMBER=your_test_number
 ```
 
-## Uso
+## Development
 
-### Desarrollo
-
-1. Iniciar el servidor de desarrollo:
+1. Start the backend server:
 ```bash
 python scripts/deploy_backend.py
 ```
 
-2. Probar el chatbot:
-   - Usar el endpoint `/chat` para pruebas sin WhatsApp
-   - Usar el endpoint `/test-message` para enviar mensajes de prueba
-   - Verificar el estado del servicio con `/health`
-
-### Producción
-
-1. Configurar el entorno de producción:
-   - Actualizar las variables de entorno
-   - Configurar el servidor web (Nginx, Apache, etc.)
-   - Configurar SSL/TLS
-
-2. Iniciar el servidor:
+2. Generate embeddings:
 ```bash
-ENVIRONMENT=production python scripts/deploy_backend.py
+python scripts/create_embeddings.py
 ```
 
-## Seguridad
+3. Fine-tune the model:
+```bash
+python scripts/train_finetune.py
+```
 
-- Validación HMAC SHA256 para webhooks
-- Manejo seguro de tokens
-- Logging detallado para monitoreo
-- Validación de solicitudes
+## Testing
 
-## Contribución
+1. Send a test message:
+```bash
+curl http://localhost:8000/test-message
+```
 
-1. Fork el repositorio
-2. Crear una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abrir un Pull Request
+2. Check service health:
+```bash
+curl http://localhost:8000/health
+```
 
-## Licencia
+## Deployment
 
-Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para más detalles.
+1. Configure production environment variables
+2. Deploy backend:
+```bash
+python scripts/deploy_backend.py
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- Faculty of Medicine, UBA
+- WhatsApp Business API
+- Hugging Face Transformers
+- FastAPI

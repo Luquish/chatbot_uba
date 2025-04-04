@@ -1,3 +1,22 @@
+"""
+Embedding generator for the UBA Medicina chatbot RAG system.
+Creates and stores vector embeddings for semantic search.
+
+This module implements:
+1. Embedding generation using multilingual models
+2. Local storage with FAISS for development
+3. Pinecone integration for production
+4. Vector index optimization
+5. Metadata handling and retrieval
+
+Key features:
+- Support for multiple embedding models
+- Memory and performance optimization
+- Robust error handling
+- Data validation
+- Detailed logging
+"""
+
 import os
 import logging
 from pathlib import Path
@@ -11,21 +30,21 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
+# Load environment variables
 load_dotenv()
 
-# Configuración de logging
+# Detailed logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Determinar el entorno (desarrollo o producción)
+# Determine environment (development or production)
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
-logger.info(f"Iniciando generación de embeddings en entorno: {ENVIRONMENT}")
+logger.info(f"Starting embedding generation in environment: {ENVIRONMENT}")
 
-# Importaciones condicionales para Pinecone (solo en producción)
+# Conditional imports for Pinecone (only in production)
 if ENVIRONMENT == 'production':
     try:
         import pinecone
@@ -33,57 +52,73 @@ if ENVIRONMENT == 'production':
         PINECONE_ENVIRONMENT = os.getenv('PINECONE_ENVIRONMENT')
         PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', 'uba-chatbot-embeddings')
         if not all([PINECONE_API_KEY, PINECONE_ENVIRONMENT]):
-            logger.warning("Falta configuración de Pinecone. Se usará FAISS local.")
+            logger.warning("Missing Pinecone configuration. Using local FAISS.")
             ENVIRONMENT = 'development'
         else:
-            logger.info("Usando Pinecone para almacenamiento de embeddings en producción.")
+            logger.info("Using Pinecone for embedding storage in production.")
     except ImportError:
-        logger.warning("No se pudo importar pinecone. Se usará FAISS local.")
+        logger.warning("Could not import pinecone. Using local FAISS.")
         ENVIRONMENT = 'development'
 
 class EmbeddingGenerator:
+    """
+    Generates and stores vector embeddings for semantic search.
+    
+    Responsibilities:
+    - Document loading and processing
+    - Embedding generation
+    - Vector index storage
+    - Metadata handling
+    - Performance optimization
+    """
+    
     def __init__(self, processed_dir: str, embeddings_dir: str):
         """
-        Inicializa el generador de embeddings.
+        Initializes the embedding generator.
         
         Args:
-            processed_dir (str): Directorio con documentos procesados
-            embeddings_dir (str): Directorio para guardar embeddings
+            processed_dir (str): Directory with processed documents
+            embeddings_dir (str): Directory to store embeddings
+            
+        Notes:
+        - Creates necessary directories
+        - Initializes embedding model
+        - Configures storage based on environment
         """
         self.processed_dir = Path(processed_dir)
         self.embeddings_dir = Path(embeddings_dir)
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         
-        # Inicializar el modelo de embeddings adecuado para español
+        # Available embedding models (ordered by preference)
         embedding_model_options = [
-            'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',  # Buen modelo multilingüe
-            'hiiamsid/sentence_similarity_spanish_es',  # Especializado en español
-            'intfloat/multilingual-e5-large'  # Modelo más grande y preciso
+            'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',  # Good multilingual model
+            'hiiamsid/sentence_similarity_spanish_es',  # Specialized in Spanish
+            'intfloat/multilingual-e5-large'  # Larger and more accurate model
         ]
         
-        # Por defecto usar el primer modelo, pero permitir configuración
+        # Select model based on configuration
         embedding_model_name = os.getenv('EMBEDDING_MODEL', embedding_model_options[0])
-        logger.info(f"Usando modelo de embeddings: {embedding_model_name}")
+        logger.info(f"Using embedding model: {embedding_model_name}")
         
         try:
             self.model = SentenceTransformer(embedding_model_name)
-            logger.info(f"Modelo de embeddings inicializado: {embedding_model_name}")
-            logger.info(f"Dimensión del modelo: {self.model.get_sentence_embedding_dimension()}")
+            logger.info(f"Embedding model initialized: {embedding_model_name}")
+            logger.info(f"Model dimension: {self.model.get_sentence_embedding_dimension()}")
         except Exception as e:
-            logger.error(f"Error al cargar modelo de embeddings: {str(e)}")
-            # Fallback al modelo más básico si hay error
+            logger.error(f"Error loading embedding model: {str(e)}")
+            # Fallback to basic model if error occurs
             self.model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
-            logger.info("Usando modelo de fallback")
+            logger.info("Using fallback model")
         
         self.is_production = ENVIRONMENT == 'production'
         
-        # Inicializar Pinecone en entorno de producción
+        # Initialize Pinecone in production environment
         if self.is_production:
             pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
             
-            # Verificar si el índice existe, si no, crearlo
+            # Check if index exists, if not, create it
             if PINECONE_INDEX_NAME not in pinecone.list_indexes():
-                logger.info(f"Creando índice '{PINECONE_INDEX_NAME}' en Pinecone...")
+                logger.info(f"Creating index '{PINECONE_INDEX_NAME}' in Pinecone...")
                 pinecone.create_index(
                     name=PINECONE_INDEX_NAME,
                     dimension=self.model.get_sentence_embedding_dimension(),
@@ -91,7 +126,7 @@ class EmbeddingGenerator:
                 )
             
             self.pinecone_index = pinecone.Index(PINECONE_INDEX_NAME)
-            logger.info(f"Índice Pinecone inicializado: {PINECONE_INDEX_NAME}")
+            logger.info(f"Pinecone index initialized: {PINECONE_INDEX_NAME}")
         
     def load_processed_documents(self) -> pd.DataFrame:
         """

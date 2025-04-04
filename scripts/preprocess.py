@@ -1,3 +1,22 @@
+"""
+Document preprocessor for the UBA Medicina chatbot RAG system.
+Extracts and processes text from PDF documents to generate embeddings.
+
+This module implements:
+1. Text extraction from PDFs using pdfminer
+2. Text cleaning and normalization
+3. Chunk segmentation with overlap
+4. Document structure detection
+5. Metadata generation
+
+Key features:
+- Robust PDF extraction
+- Document structure preservation
+- Different content type handling
+- Detailed logging
+- Data validation
+"""
+
 import os
 import logging
 from pathlib import Path
@@ -14,7 +33,7 @@ from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
 
-# Configuración de logging
+# Detailed logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -22,13 +41,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class DocumentPreprocessor:
+    """
+    Preprocesses PDF documents for the RAG system.
+    
+    Responsibilities:
+    - PDF text extraction
+    - Text cleaning and normalization
+    - Chunk segmentation
+    - Structure detection
+    - Metadata generation
+    """
+    
     def __init__(self, raw_dir: str, processed_dir: str):
         """
-        Inicializa el preprocesador de documentos.
+        Initializes the document preprocessor.
         
         Args:
-            raw_dir (str): Directorio con documentos sin procesar
-            processed_dir (str): Directorio para guardar documentos procesados
+            raw_dir (str): Directory with unprocessed documents
+            processed_dir (str): Directory to save processed documents
+            
+        Notes:
+        - Creates necessary directories
+        - Configures logging
+        - Prepares file structure
         """
         self.raw_dir = Path(raw_dir)
         self.processed_dir = Path(processed_dir)
@@ -36,25 +71,30 @@ class DocumentPreprocessor:
         
     def extract_text_from_pdf(self, pdf_path: Path) -> str:
         """
-        Extrae texto de un archivo PDF usando pdfminer de manera más robusta.
+        Extracts text from a PDF file using pdfminer.
         
         Args:
-            pdf_path (Path): Ruta al archivo PDF
+            pdf_path (Path): Path to the PDF file
             
         Returns:
-            str: Texto extraído del PDF
+            str: Extracted text from the PDF
+            
+        Notes:
+        - Uses multiple extraction methods
+        - Handles errors and special cases
+        - Validates extracted text quality
         """
         try:
-            logger.info(f"Extrayendo texto de: {pdf_path}")
+            logger.info(f"Extracting text from: {pdf_path}")
             
-            # Método 1: Usar extract_text (más simple pero a veces menos preciso)
+            # Method 1: Use extract_text (simpler but sometimes less accurate)
             text = extract_text(pdf_path)
             
-            # Si el texto está vacío o es muy corto, usar método alternativo
+            # If text is empty or too short, use alternative method
             if not text or len(text) < 100:
-                logger.warning(f"Primera extracción produjo texto insuficiente, usando método alternativo para {pdf_path}")
+                logger.warning(f"First extraction produced insufficient text, using alternative method for {pdf_path}")
                 
-                # Método 2: Más detallado usando componentes de pdfminer
+                # Method 2: More detailed using pdfminer components
                 output_string = StringIO()
                 with open(pdf_path, 'rb') as in_file:
                     parser = PDFParser(in_file)
@@ -67,16 +107,16 @@ class DocumentPreprocessor:
                 
                 text = output_string.getvalue()
             
-            # Verificación básica
+            # Basic verification
             if not text:
-                logger.error(f"No se pudo extraer texto de {pdf_path}")
+                logger.error(f"Could not extract text from {pdf_path}")
                 return ""
                 
-            logger.info(f"Texto extraído exitosamente: {len(text)} caracteres")
+            logger.info(f"Text extracted successfully: {len(text)} characters")
             return text
             
         except Exception as e:
-            logger.error(f"Error al extraer texto de {pdf_path}: {str(e)}")
+            logger.error(f"Error extracting text from {pdf_path}: {str(e)}")
             return ""
 
     def clean_text(self, text: str) -> str:

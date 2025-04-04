@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 """
-Script para automatizar la configuración del entorno de desarrollo para WhatsApp.
-Enfoque manual - Este script:
-1. Inicia el backend de Python en segundo plano
-2. Inicia ngrok y obtiene la URL pública
-3. Verifica el token de WhatsApp
-4. Proporciona instrucciones para configurar manualmente Glitch y Meta
+Automatic setup script for the UBA Medicine Chatbot.
+This script handles the initial configuration and setup of the project.
+
+Key features:
+- Environment variable configuration
+- Directory structure creation
+- Model download and setup
+- Dependencies installation
+- WhatsApp API configuration
 """
 
 import os
@@ -14,34 +17,170 @@ import logging
 import asyncio
 import requests
 import signal
+import subprocess
+import json
 from pathlib import Path
+from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
-# Configuración de logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Cargar variables de entorno
+# Cargar variables de entorno desde .env
 load_dotenv()
 
-# Configuración
+# Configuración de credenciales de WhatsApp desde variables de entorno
 WHATSAPP_API_TOKEN = os.getenv('WHATSAPP_API_TOKEN')
 WHATSAPP_PHONE_NUMBER_ID = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
 WHATSAPP_BUSINESS_ACCOUNT_ID = os.getenv('WHATSAPP_BUSINESS_ACCOUNT_ID')
 WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv('WHATSAPP_WEBHOOK_VERIFY_TOKEN')
 
-# Variables globales para procesos
+# Variables globales para manejo de procesos
 backend_process = None
 ngrok_process = None
 ngrok_url = None
 server_started = False
 
+class AutoSetup:
+    """
+    Handles automatic setup of the chatbot project.
+    
+    Responsibilities:
+    - Creating necessary directories
+    - Setting up environment variables
+    - Installing dependencies
+    - Downloading and configuring models
+    - Setting up WhatsApp integration
+    """
+    
+    def __init__(self):
+        """Initialize the AutoSetup class."""
+        self.root_dir = Path(__file__).parent.parent
+        self.env_file = self.root_dir / '.env'
+        self.requirements_file = self.root_dir / 'requirements.txt'
+        
+    def create_directories(self) -> None:
+        """Create necessary project directories."""
+        directories = [
+            'data',
+            'data/raw',
+            'data/processed',
+            'data/embeddings',
+            'models',
+            'logs'
+        ]
+        
+        for directory in directories:
+            dir_path = self.root_dir / directory
+            dir_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created directory: {directory}")
+            
+    def setup_env_variables(self) -> None:
+        """Configure environment variables."""
+        if not self.env_file.exists():
+            # Create .env file with default values
+            env_vars = {
+                'ENVIRONMENT': 'development',
+                'MODEL_PATH': 'models/finetuned_model',
+                'EMBEDDINGS_DIR': 'data/embeddings',
+                'WHATSAPP_API_TOKEN': '',
+                'WHATSAPP_PHONE_NUMBER_ID': '',
+                'WHATSAPP_BUSINESS_ACCOUNT_ID': '',
+                'WHATSAPP_WEBHOOK_VERIFY_TOKEN': '',
+                'MY_PHONE_NUMBER': ''
+            }
+            
+            with open(self.env_file, 'w') as f:
+                for key, value in env_vars.items():
+                    f.write(f"{key}={value}\n")
+                    
+            logger.info("Created .env file with default values")
+        else:
+            logger.info(".env file already exists")
+            
+    def install_dependencies(self) -> None:
+        """Install project dependencies."""
+        try:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', str(self.requirements_file)], check=True)
+            logger.info("Dependencies installed successfully")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error installing dependencies: {e}")
+            sys.exit(1)
+            
+    def download_models(self) -> None:
+        """Download and configure required models."""
+        try:
+            # Download base model
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            
+            model_name = "microsoft/phi-2"
+            model_path = self.root_dir / 'models' / 'base_model'
+            
+            if not model_path.exists():
+                logger.info(f"Downloading base model: {model_name}")
+                model = AutoModelForCausalLM.from_pretrained(model_name)
+                tokenizer = AutoTokenizer.from_pretrained(model_name)
+                
+                model.save_pretrained(model_path)
+                tokenizer.save_pretrained(model_path)
+                logger.info("Base model downloaded successfully")
+            else:
+                logger.info("Base model already exists")
+                
+        except Exception as e:
+            logger.error(f"Error downloading models: {e}")
+            sys.exit(1)
+            
+    def setup_whatsapp(self) -> None:
+        """Configure WhatsApp Business API integration."""
+        load_dotenv()
+        
+        # Check if WhatsApp credentials are configured
+        required_vars = [
+            'WHATSAPP_API_TOKEN',
+            'WHATSAPP_PHONE_NUMBER_ID',
+            'WHATSAPP_BUSINESS_ACCOUNT_ID',
+            'WHATSAPP_WEBHOOK_VERIFY_TOKEN'
+        ]
+        
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        
+        if missing_vars:
+            logger.warning("Missing WhatsApp credentials:")
+            for var in missing_vars:
+                logger.warning(f"- {var}")
+            logger.info("Please configure these variables in the .env file")
+        else:
+            logger.info("WhatsApp credentials configured")
+            
+    def run(self) -> None:
+        """Execute the complete setup process."""
+        logger.info("Starting automatic setup...")
+        
+        self.create_directories()
+        self.setup_env_variables()
+        self.install_dependencies()
+        self.download_models()
+        self.setup_whatsapp()
+        
+        logger.info("Setup completed successfully")
+        
 async def run_process(cmd, name):
-    """Ejecuta un proceso e imprime su salida."""
+    """
+    Ejecuta un proceso del sistema de manera asíncrona.
+    
+    Args:
+        cmd (str): Comando a ejecutar
+        name (str): Nombre descriptivo del proceso
+        
+    Returns:
+        Process: Objeto de proceso asíncrono
+    """
     process = await asyncio.create_subprocess_shell(
         cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -282,6 +421,11 @@ async def main():
         # Asegurarse de que cleanup se llame al salir
         await cleanup()
 
+def main():
+    """Main function to run the setup."""
+    setup = AutoSetup()
+    setup.run()
+    
 if __name__ == "__main__":
     try:
         asyncio.run(main())

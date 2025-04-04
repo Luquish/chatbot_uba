@@ -1,3 +1,22 @@
+"""
+Fine-tuning system for the UBA Medicina chatbot language model.
+Adapts base models using LoRA/QLoRA techniques for the specific domain.
+
+This module implements:
+1. Base model loading and preparation
+2. Fine-tuning using LoRA/QLoRA
+3. Memory and performance optimization
+4. Training dataset handling
+5. Model saving and versioning
+
+Key features:
+- Support for 8 and 4-bit quantization
+- Automatic column detection
+- Hyperparameter optimization
+- Efficient memory management
+- Detailed logging
+"""
+
 import os
 import logging
 from pathlib import Path
@@ -21,10 +40,10 @@ import pandas as pd
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
+# Load environment variables
 load_dotenv()
 
-# Configuración de logging
+# Detailed logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -32,6 +51,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class ModelTrainer:
+    """
+    Handles language model fine-tuning.
+    
+    Responsibilities:
+    - Model loading and preparation
+    - LoRA/QLoRA configuration
+    - Data preparation
+    - Training and evaluation
+    - Model saving
+    """
+    
     def __init__(
         self,
         model_name: str = os.getenv('BASE_MODEL_NAME', 'mistralai/Mistral-7B-v0.1'),
@@ -40,27 +70,33 @@ class ModelTrainer:
         device: str = "cuda" if torch.cuda.is_available() else "cpu"
     ):
         """
-        Inicializa el entrenador del modelo.
+        Initializes the model trainer.
         
         Args:
-            model_name (str): Nombre del modelo base (ej: "mistralai/Mistral-7B-v0.1")
-            output_dir (str): Directorio para guardar el modelo fine-tuneado
-            finetuning_dir (str): Directorio con datos de entrenamiento
-            device (str): Dispositivo para entrenamiento
+            model_name (str): Base model name
+            output_dir (str): Directory to save the model
+            finetuning_dir (str): Directory with training data
+            device (str): Training device
+            
+        Notes:
+        - Configures model and tokenizer
+        - Prepares LoRA/QLoRA
+        - Optimizes memory usage
+        - Handles quantization
         """
         self.model_name = model_name
         self.output_dir = Path(output_dir)
         self.finetuning_dir = Path(finetuning_dir)
         self.device = device
         
-        # Crear directorio de salida
+        # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Inicializar tokenizer y modelo
+        # Initialize tokenizer and model
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # Configuración de bits
+        # Bit configuration for optimization
         use_8bit = os.getenv('USE_8BIT', 'True').lower() == 'true'
         use_4bit = os.getenv('USE_4BIT', 'False').lower() == 'true'
         
@@ -79,12 +115,12 @@ class ModelTrainer:
             **load_kwargs
         )
         
-        # Configurar LoRA
+        # Configure LoRA
         self.setup_lora()
         
     def setup_lora(self):
-        """Configura y aplica LoRA al modelo."""
-        # Obtener parámetros de LoRA desde variables de entorno
+        """Configures and applies LoRA to the model."""
+        # Get LoRA parameters from environment variables
         lora_r = int(os.getenv('LORA_R', '16'))
         lora_alpha = int(os.getenv('LORA_ALPHA', '32'))
         lora_dropout = float(os.getenv('LORA_DROPOUT', '0.05'))
@@ -105,30 +141,30 @@ class ModelTrainer:
         
     def load_training_data(self) -> Dataset:
         """
-        Carga y prepara los datos de entrenamiento con detección automática de columnas.
+        Loads and prepares training data with automatic column detection.
         
         Returns:
-            Dataset: Dataset de Hugging Face
+            Dataset: Hugging Face Dataset
         """
-        # Cargar datos de entrenamiento
+        # Load training data
         data_path = self.finetuning_dir / "training_data.csv"
         if not data_path.exists():
             raise FileNotFoundError(f"No se encontró el archivo {data_path}")
             
         df = pd.read_csv(data_path)
         
-        # Detectar automáticamente columnas relevantes
+        # Automatically detect relevant columns
         columns = df.columns.tolist()
         
-        # Buscar columnas de preguntas/consultas
+        # Search for question/query columns
         question_columns = [col for col in columns if col.lower() in 
                         ['pregunta', 'question', 'consulta', 'input', 'prompt', 'query']]
         
-        # Buscar columnas de respuestas
+        # Search for answer columns
         answer_columns = [col for col in columns if col.lower() in 
                      ['respuesta', 'answer', 'contestacion', 'output', 'response']]
         
-        # Si no encuentra columnas específicas, usar la primera para preguntas y la segunda para respuestas
+        # If specific columns are not found, use the first column for questions and the second for answers
         if not question_columns and len(columns) >= 1:
             question_columns = [columns[0]]
             logger.warning(f"No se detectaron columnas de preguntas. Usando '{columns[0]}'")
@@ -140,16 +176,16 @@ class ModelTrainer:
         if not question_columns or not answer_columns:
             raise ValueError("No se pudieron detectar columnas válidas en el CSV")
         
-        # Usar la primera columna detectada de cada tipo
+        # Use the first detected column of each type
         question_col = question_columns[0]
         answer_col = answer_columns[0]
         
         logger.info(f"Usando columna '{question_col}' para preguntas y '{answer_col}' para respuestas")
         
-        # Crear textos formateados para entrenamiento
+        # Create formatted texts for training
         df['text'] = "Pregunta: " + df[question_col] + "\nRespuesta: " + df[answer_col]
         
-        # Tokenizar textos
+        # Tokenize texts
         max_length = int(os.getenv('MAX_LENGTH', '512'))
         
         def tokenize_function(examples):
@@ -160,7 +196,7 @@ class ModelTrainer:
                 max_length=max_length
             )
             
-        # Crear dataset
+        # Create dataset
         dataset = Dataset.from_pandas(df)
         tokenized_dataset = dataset.map(
             tokenize_function,
@@ -172,19 +208,19 @@ class ModelTrainer:
         
     def train(self):
         """
-        Entrena el modelo usando LoRA con parámetros de las variables de entorno.
+        Trains the model using LoRA with parameters from environment variables.
         """
-        # Cargar datos
+        # Load data
         train_dataset = self.load_training_data()
         
-        # Obtener parámetros de entrenamiento desde variables de entorno
+        # Get training parameters from environment variables
         num_train_epochs = int(os.getenv('NUM_EPOCHS', '3'))
         batch_size = int(os.getenv('BATCH_SIZE', '4'))
         gradient_accumulation_steps = int(os.getenv('GRADIENT_ACCUMULATION_STEPS', '4'))
         learning_rate = float(os.getenv('LEARNING_RATE', '2e-4'))
         fp16 = os.getenv('FP16', 'True').lower() == 'true'
         
-        # Configurar argumentos de entrenamiento
+        # Configure training arguments
         training_args = TrainingArguments(
             output_dir=str(self.output_dir),
             num_train_epochs=num_train_epochs,
@@ -200,7 +236,7 @@ class ModelTrainer:
             push_to_hub=False
         )
         
-        # Inicializar trainer
+        # Initialize trainer
         trainer = Trainer(
             model=self.model,
             args=training_args,
@@ -211,19 +247,19 @@ class ModelTrainer:
             )
         )
         
-        # Entrenar modelo
+        # Train model
         logger.info("Iniciando entrenamiento...")
         trainer.train()
         
-        # Guardar modelo
+        # Save model
         trainer.save_model()
         self.tokenizer.save_pretrained(self.output_dir)
         
         logger.info(f"Modelo guardado en {self.output_dir}")
 
 def main():
-    """Función principal para ejecutar el fine-tuning."""
-    # Inicializar y entrenar
+    """Main function to run fine-tuning."""
+    # Initialize and train
     trainer = ModelTrainer()
     trainer.train()
 
