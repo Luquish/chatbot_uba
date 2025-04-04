@@ -4,23 +4,21 @@ import json
 import requests
 from pathlib import Path
 from typing import Dict, Optional, Union, Any
-from enum import Enum
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from twilio.rest import Client
-from twilio.request_validator import RequestValidator
 from dotenv import load_dotenv
 from run_rag import RAGSystem
 import uvicorn
+import re
 
 # Cargar variables de entorno
 load_dotenv()
 
 # Configuración de logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.DEBUG,  # Cambiar a DEBUG para ver todos los mensajes
+    format='%(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -28,245 +26,209 @@ logger = logging.getLogger(__name__)
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 logger.info(f"Iniciando en entorno: {ENVIRONMENT}")
 
-# Configuración de WhatsApp
-class WhatsAppProvider(str, Enum):
-    TWILIO = "twilio"
-    OFFICIAL_API = "official_api"
-
-# Determinar el proveedor basado en el entorno
-WHATSAPP_PROVIDER = WhatsAppProvider.TWILIO if ENVIRONMENT == 'development' else WhatsAppProvider.OFFICIAL_API
-logger.info(f"Usando proveedor de WhatsApp: {WHATSAPP_PROVIDER}")
-
-# Configuración de Twilio
-TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
-TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
-
-# Configuración de WhatsApp Business API oficial
+# Configuración de WhatsApp Business API
 WHATSAPP_API_TOKEN = os.getenv('WHATSAPP_API_TOKEN')
 WHATSAPP_PHONE_NUMBER_ID = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
 WHATSAPP_BUSINESS_ACCOUNT_ID = os.getenv('WHATSAPP_BUSINESS_ACCOUNT_ID')
+WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv('WHATSAPP_WEBHOOK_VERIFY_TOKEN')
 
 # Número de teléfono para pruebas
 MY_PHONE_NUMBER = os.getenv('MY_PHONE_NUMBER')
 
-# Inicializar clientes de WhatsApp según el proveedor
-twilio_client = None
-twilio_validator = None
-
-if WHATSAPP_PROVIDER == WhatsAppProvider.TWILIO and all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
-    twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    twilio_validator = RequestValidator(TWILIO_AUTH_TOKEN)
-    logger.info("Cliente Twilio inicializado correctamente")
-elif WHATSAPP_PROVIDER == WhatsAppProvider.OFFICIAL_API and all([WHATSAPP_API_TOKEN, WHATSAPP_PHONE_NUMBER_ID]):
-    logger.info("Configuración de WhatsApp API oficial inicializada correctamente")
-else:
-    logger.warning(f"Falta configuración para el proveedor {WHATSAPP_PROVIDER}. La integración con WhatsApp no estará completamente disponible.")
-
-# Clase abstracta para manejar envío de mensajes de WhatsApp
+# Clase para manejar envío de mensajes de WhatsApp
 class WhatsAppHandler:
-    async def validate_request(self, request: Request) -> bool:
-        raise NotImplementedError("Este método debe ser implementado por las subclases")
-    
-    async def parse_message(self, request: Request) -> Dict[str, str]:
-        raise NotImplementedError("Este método debe ser implementado por las subclases")
-    
-    async def send_message(self, to: str, body: str) -> Dict[str, Any]:
-        raise NotImplementedError("Este método debe ser implementado por las subclases")
-
-# Implementación para Twilio
-class TwilioWhatsAppHandler(WhatsAppHandler):
-    def __init__(self, client: Client, validator: RequestValidator, phone_number: str):
-        self.client = client
-        self.validator = validator
-        self.phone_number = phone_number
-    
-    async def validate_request(self, request: Request) -> bool:
-        if not all([self.client, self.validator]):
-            return False
-            
-        # En desarrollo, podemos omitir la validación para facilitar las pruebas
-        if ENVIRONMENT == "development":
-            logger.warning("Omitiendo validación de firma de Twilio en entorno de desarrollo")
-            return True
-            
-        twilio_signature = request.headers.get('X-Twilio-Signature')
-        url = str(request.url)
-        form_data = await request.form()
-        params = dict(form_data)
-        
-        return self.validator.validate(url, params, twilio_signature)
-    
-    async def parse_message(self, request: Request) -> Dict[str, str]:
-        try:
-            # Obtener datos del formulario
-            form_data = await request.form()
-            params = dict(form_data)
-            
-            # Loguear para debugging
-            logger.debug(f"Datos recibidos de Twilio: {params}")
-            
-            # Extraer información del mensaje
-            message_body = params.get('Body', '')
-            from_number = params.get('From', '').replace('whatsapp:', '')
-            to_number = params.get('To', '').replace('whatsapp:', '')
-            
-            return {
-                'body': message_body,
-                'from': from_number,
-                'to': to_number
-            }
-        except Exception as e:
-            logger.error(f"Error al parsear mensaje de Twilio: {str(e)}")
-            logger.error(f"Request headers: {request.headers}")
-            logger.error(f"Request method: {request.method}")
-            
-            # Intentar obtener el cuerpo completo de la solicitud para diagnóstico
-            try:
-                body = await request.body()
-                logger.error(f"Request body: {body}")
-            except Exception:
-                pass
-                
-            # Devolver diccionario vacío en caso de error
-            return {'body': '', 'from': '', 'to': ''}
-    
-    async def send_message(self, to: str, body: str) -> Dict[str, Any]:
-        try:
-            response = self.client.messages.create(
-                body=body,
-                from_=f"whatsapp:{self.phone_number}",
-                to=f"whatsapp:{to}"
-            )
-            
-            return {
-                'status': 'success',
-                'message_id': response.sid
-            }
-        except Exception as e:
-            logger.error(f"Error al enviar mensaje con Twilio: {str(e)}")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
-
-# Implementación para API oficial de WhatsApp
-class OfficialWhatsAppHandler(WhatsAppHandler):
-    def __init__(self, api_token: str, phone_number_id: str):
+    def __init__(self, api_token: str, phone_number_id: str, business_account_id: str):
         self.api_token = api_token
         self.phone_number_id = phone_number_id
+        self.business_account_id = business_account_id
         self.api_url = f"https://graph.facebook.com/v18.0/{phone_number_id}/messages"
         self.headers = {
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json"
         }
+        self.webhook_verify_token = os.getenv('WHATSAPP_WEBHOOK_VERIFY_TOKEN')
+    
+    def normalize_phone_number(self, phone: str) -> str:
+        """Normaliza el número de teléfono para Argentina, removiendo el '9' si existe."""
+        # Eliminar cualquier caracter no numérico
+        clean_number = re.sub(r'[^0-9]', '', phone)
+        
+        # Si es un número de Argentina (comienza con 54) y tiene el 9 después del código de país
+        if clean_number.startswith('54') and len(clean_number) > 2:
+            if clean_number[2] == '9':
+                # Remover el 9 después del código de país
+                clean_number = clean_number[:2] + clean_number[3:]
+                logger.info(f"Número normalizado de {phone} a {clean_number}")
+        
+        return clean_number
     
     async def validate_request(self, request: Request) -> bool:
-        # En desarrollo, podemos omitir la validación para facilitar las pruebas
+        # Verificar token de verificación para webhooks
+        if request.method == "GET":
+            mode = request.query_params.get("hub.mode")
+            token = request.query_params.get("hub.verify_token")
+            challenge = request.query_params.get("hub.challenge")
+            
+            if mode == "subscribe" and token == self.webhook_verify_token:
+                return True
+            return False
+            
+        # Validar firma de webhook para POST
         if ENVIRONMENT == "development":
-            logger.warning("Omitiendo validación de firma de WhatsApp API en entorno de desarrollo")
+            logger.warning("Omitiendo validación de firma de webhook en desarrollo")
             return True
             
-        # La API oficial usa un token de verificación diferente
-        # Implementa aquí la validación según la documentación oficial
-        return True
+        # Obtener firma del header
+        signature = request.headers.get("x-hub-signature-256")
+        if not signature:
+            logger.error("No se encontró firma en el header")
+            return False
+            
+        # Obtener cuerpo del request
+        body = await request.body()
+        
+        # Calcular HMAC SHA256
+        import hmac
+        import hashlib
+        expected_signature = hmac.new(
+            self.webhook_verify_token.encode(),
+            body,
+            hashlib.sha256
+        ).hexdigest()
+        
+        # Comparar firmas
+        return hmac.compare_digest(f"sha256={expected_signature}", signature)
     
     async def parse_message(self, request: Request) -> Dict[str, str]:
         try:
-            # La estructura de la solicitud de la API oficial es diferente a Twilio
             data = await request.json()
-            
-            # Loguear para debugging
             logger.debug(f"Datos recibidos de WhatsApp API: {data}")
             
-            try:
-                # Estructura estándar de webhook de WhatsApp API
-                entry = data.get('entry', [])[0]
-                changes = entry.get('changes', [])[0]
-                value = changes.get('value', {})
-                message = value.get('messages', [])[0]
-                
-                message_body = message.get('text', {}).get('body', '')
-                from_number = message.get('from', '')
-                
-                return {
-                    'body': message_body,
-                    'from': from_number,
-                    'to': self.phone_number_id
-                }
-            except (IndexError, KeyError) as e:
-                logger.error(f"Error al parsear mensaje de WhatsApp API: {str(e)}")
-                logger.error(f"Estructura del mensaje: {data}")
-                return {'body': '', 'from': '', 'to': ''}
-                
+            # Estructura estándar de webhook de WhatsApp API
+            entry = data.get('entry', [])[0]
+            changes = entry.get('changes', [])[0]
+            value = changes.get('value', {})
+            message = value.get('messages', [])[0]
+            
+            # Extraer información del mensaje
+            message_body = message.get('text', {}).get('body', '')
+            from_number = message.get('from', '')
+            message_id = message.get('id', '')
+            timestamp = message.get('timestamp', '')
+            
+            # Extraer información de contacto si está disponible
+            contacts = value.get('contacts', [])
+            contact_info = contacts[0] if contacts else {}
+            profile_name = contact_info.get('profile', {}).get('name', '')
+            
+            return {
+                'body': message_body,
+                'from': from_number,
+                'to': self.phone_number_id,
+                'message_id': message_id,
+                'timestamp': timestamp,
+                'profile_name': profile_name
+            }
+        except (IndexError, KeyError) as e:
+            logger.error(f"Error al parsear mensaje de WhatsApp API: {str(e)}")
+            logger.error(f"Estructura del mensaje: {data}")
+            return {'body': '', 'from': '', 'to': ''}
         except Exception as e:
             logger.error(f"Error general al parsear mensaje de WhatsApp API: {str(e)}")
             logger.error(f"Request headers: {request.headers}")
             logger.error(f"Request method: {request.method}")
-            
-            # Intentar obtener el cuerpo completo de la solicitud para diagnóstico
-            try:
-                body = await request.body()
-                logger.error(f"Request body: {body}")
-            except Exception:
-                pass
-                
-            # Devolver diccionario vacío en caso de error
             return {'body': '', 'from': '', 'to': ''}
     
     async def send_message(self, to: str, body: str) -> Dict[str, Any]:
         try:
+            # Normalizar el número de teléfono
+            formatted_phone = self.normalize_phone_number(to)
+            
+            logger.info(f"Enviando mensaje a {formatted_phone}: '{body}'")
+            
+            # Preparar payload según la documentación oficial
             payload = {
                 "messaging_product": "whatsapp",
                 "recipient_type": "individual",
-                "to": to,
+                "to": formatted_phone,
                 "type": "text",
                 "text": {
+                    "preview_url": False,  # Desactivar preview de URLs
                     "body": body
                 }
             }
             
+            # Mostrar información de depuración
+            logger.debug(f"URL: {self.api_url}")
+            logger.debug(f"Headers: {json.dumps(self.headers, indent=2)}")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
+            
+            # Enviar mensaje
             response = requests.post(
                 self.api_url,
                 headers=self.headers,
-                data=json.dumps(payload)
+                json=payload
             )
             
-            if response.status_code == 200:
-                return {
-                    'status': 'success',
-                    'message_id': response.json().get('messages', [{}])[0].get('id', '')
-                }
-            else:
-                logger.error(f"Error al enviar mensaje por WhatsApp API: {response.text}")
+            # Procesar respuesta
+            try:
+                response_data = response.json()
+            except json.JSONDecodeError:
+                logger.error(f"Error al decodificar respuesta JSON. Status code: {response.status_code}, Text: {response.text}")
                 return {
                     'status': 'error',
-                    'message': response.text
+                    'message': f"Error de respuesta no-JSON: {response.text}"
+                }
+            
+            logger.debug(f"Respuesta API: {json.dumps(response_data, indent=2)}")
+            
+            if response.status_code == 200:
+                message_id = response_data.get('messages', [{}])[0].get('id', '')
+                logger.info(f"Mensaje enviado exitosamente. ID: {message_id}")
+                return {
+                    'status': 'success',
+                    'message_id': message_id,
+                    'whatsapp_api_response': response_data
+                }
+            else:
+                error_message = response_data.get('error', {}).get('message', 'Error desconocido')
+                error_code = response_data.get('error', {}).get('code', '')
+                error_type = response_data.get('error', {}).get('type', '')
+                error_fbtrace_id = response_data.get('error', {}).get('fbtrace_id', '')
+                
+                logger.error(f"Error al enviar mensaje por WhatsApp API: {error_message}")
+                logger.error(f"Código: {error_code}, Tipo: {error_type}, FB Trace ID: {error_fbtrace_id}")
+                
+                return {
+                    'status': 'error',
+                    'message': error_message,
+                    'code': error_code,
+                    'type': error_type,
+                    'details': response_data
                 }
         except Exception as e:
-            logger.error(f"Error general al enviar mensaje con WhatsApp API: {str(e)}")
+            logger.error(f"Error general al enviar mensaje con WhatsApp API: {str(e)}", exc_info=True)
             return {
                 'status': 'error',
                 'message': str(e)
             }
 
-# Función para obtener el handler adecuado según la configuración
+# Función para obtener el handler de WhatsApp
 def get_whatsapp_handler() -> WhatsAppHandler:
-    if WHATSAPP_PROVIDER == WhatsAppProvider.TWILIO and twilio_client and twilio_validator:
-        return TwilioWhatsAppHandler(
-            twilio_client,
-            twilio_validator,
-            TWILIO_PHONE_NUMBER
-        )
-    elif WHATSAPP_PROVIDER == WhatsAppProvider.OFFICIAL_API and WHATSAPP_API_TOKEN and WHATSAPP_PHONE_NUMBER_ID:
-        return OfficialWhatsAppHandler(
+    if all([
+        WHATSAPP_API_TOKEN,
+        WHATSAPP_PHONE_NUMBER_ID,
+        WHATSAPP_BUSINESS_ACCOUNT_ID
+    ]):
+        return WhatsAppHandler(
             WHATSAPP_API_TOKEN,
-            WHATSAPP_PHONE_NUMBER_ID
+            WHATSAPP_PHONE_NUMBER_ID,
+            WHATSAPP_BUSINESS_ACCOUNT_ID
         )
     else:
         raise HTTPException(
             status_code=503,
-            detail=f"Integración con WhatsApp ({WHATSAPP_PROVIDER}) no disponible. Faltan credenciales."
+            detail="Integración con WhatsApp no disponible. Faltan credenciales."
         )
 
 # Inicializar FastAPI
@@ -288,12 +250,32 @@ app.add_middleware(
 # Inicializar sistema RAG (usar variables de entorno)
 model_path = os.getenv('MODEL_PATH', 'models/finetuned_model')
 embeddings_dir = os.getenv('EMBEDDINGS_DIR', 'data/embeddings')
-rag_system = RAGSystem(model_path, embeddings_dir)
+
+# Inicializar RAG con manejo de errores
+try:
+    logger.info(f"Inicializando sistema RAG con model_path={model_path}, embeddings_dir={embeddings_dir}")
+    rag_system = RAGSystem(model_path, embeddings_dir)
+    rag_initialized = True
+    logger.info("Sistema RAG inicializado correctamente")
+except Exception as e:
+    logger.error(f"Error al inicializar RAG: {str(e)}", exc_info=True)
+    logger.warning("Usando sistema de respuesta alternativo")
+    rag_initialized = False
+    
+    # Crear función alternativa simple para desarrollo
+    class FallbackRAG:
+        def process_query(self, query):
+            logger.info(f"Usando sistema fallback para query: {query}")
+            return {
+                "response": f"Recibí tu mensaje: '{query}'. El sistema RAG está en mantenimiento, pero podemos conversar de manera básica."
+            }
+    
+    rag_system = FallbackRAG()
 
 @app.post("/webhook/whatsapp")
-async def whatsapp_webhook(request: Request, whatsapp_handler: WhatsAppHandler = Depends(get_whatsapp_handler)):
+async def whatsapp_webhook(request: Request):
     """
-    Webhook para recibir mensajes de WhatsApp (compatible con Twilio y API oficial).
+    Webhook para recibir mensajes de WhatsApp.
     
     Args:
         request (Request): Request de FastAPI
@@ -306,76 +288,132 @@ async def whatsapp_webhook(request: Request, whatsapp_handler: WhatsAppHandler =
         logger.info(f"Webhook recibido - Método: {request.method}")
         logger.info(f"Headers: {request.headers}")
         
-        # Para Twilio, devolvemos un TwiML válido aunque ocurra un error
-        is_twilio = WHATSAPP_PROVIDER == WhatsAppProvider.TWILIO
+        # Obtener el cuerpo de la solicitud
+        body = await request.body()
         
+        # Validar la firma del webhook en producción
+        if ENVIRONMENT == "production":
+            signature = request.headers.get("x-hub-signature-256", "")
+            if not signature:
+                logger.error("Firma no encontrada en headers")
+                raise HTTPException(status_code=403, detail="Firma no encontrada")
+                
+            # Calcular y verificar firma
+            import hmac
+            import hashlib
+            
+            expected_signature = hmac.new(
+                WHATSAPP_WEBHOOK_VERIFY_TOKEN.encode(),
+                body,
+                hashlib.sha256
+            ).hexdigest()
+            
+            if not hmac.compare_digest(f"sha256={expected_signature}", signature):
+                logger.error("Firma inválida")
+                raise HTTPException(status_code=403, detail="Firma inválida")
+        
+        # Parsear el cuerpo JSON
         try:
-            # Validar solicitud
-            is_valid = await whatsapp_handler.validate_request(request)
-            if not is_valid:
-                logger.warning("Solicitud inválida recibida en el webhook")
-                raise HTTPException(status_code=403, detail="Solicitud inválida")
+            data = await request.json()
+            logger.debug(f"Datos recibidos: {json.dumps(data, indent=2)}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Error al parsear JSON: {str(e)}")
+            raise HTTPException(status_code=400, detail="JSON inválido")
+        
+        # Verificar si es un mensaje
+        if "object" not in data:
+            logger.warning("Objeto no encontrado en la solicitud")
+            return {"status": "ignored"}
+            
+        if data["object"] != "whatsapp_business_account":
+            logger.warning(f"Objeto no esperado: {data['object']}")
+            return {"status": "ignored"}
+            
+        # Procesar entrada
+        try:
+            entry = data["entry"][0]
+            changes = entry["changes"][0]
+            value = changes["value"]
+            
+            if "messages" in value:
+                message = value["messages"][0]
                 
-            # Parsear mensaje
-            message = await whatsapp_handler.parse_message(request)
-            logger.info(f"Mensaje recibido: {message}")
-            
-            if not message.get('body'):
-                logger.warning("Mensaje recibido sin cuerpo")
-                if is_twilio:
-                    return {"message": "No message body found"}
-                return {"status": "ignored", "message": "No se encontró contenido en el mensaje"}
+                # Extraer información del mensaje
+                message_body = message.get("text", {}).get("body", "")
+                from_number = message.get("from", "")
                 
-            # Generar respuesta usando RAG
-            try:
-                result = rag_system.process_query(message['body'])
-                response_text = result['response']
-            except Exception as e:
-                logger.error(f"Error al procesar consulta RAG: {str(e)}")
-                response_text = "Lo siento, tuve un problema procesando tu mensaje. Por favor, intenta de nuevo."
-            
-            # Enviar respuesta por WhatsApp
-            send_result = await whatsapp_handler.send_message(
-                message['from'],
-                response_text
-            )
-            
-            # Si es Twilio, devolvemos una respuesta compatible
-            if is_twilio:
-                return {"message": "Message processed successfully"}
+                # Normalizar el número del remitente
+                whatsapp_handler = get_whatsapp_handler()
+                from_number = whatsapp_handler.normalize_phone_number(from_number)
                 
-            # Si no es Twilio, devolvemos detalles completos
-            return {
-                "status": "success",
-                "message": "Respuesta enviada",
-                "details": send_result
-            }
-            
-        except Exception as e:
-            logger.error(f"Error en webhook de WhatsApp: {str(e)}")
-            
-            # Si es Twilio, devolvemos una respuesta compatible
-            if is_twilio:
-                return {"message": "Error processing message"}
+                # Generar respuesta usando RAG
+                try:
+                    result = rag_system.process_query(message_body)
+                    response_text = result["response"]
+                except Exception as e:
+                    logger.error(f"Error al procesar consulta RAG: {str(e)}")
+                    response_text = "Lo siento, tuve un problema procesando tu mensaje. Por favor, intenta de nuevo."
                 
-            # Si no es Twilio, devolvemos error estándar
-            raise HTTPException(status_code=500, detail=str(e))
+                # Enviar respuesta
+                send_result = await whatsapp_handler.send_message(
+                    from_number,
+                    response_text
+                )
+                
+                return {
+                    "status": "success",
+                    "message": "Respuesta enviada",
+                    "details": send_result
+                }
+                
+        except (KeyError, IndexError) as e:
+            logger.error(f"Error al procesar entrada: {str(e)}")
+            return {"status": "error", "message": "Formato de entrada inválido"}
+        
+        return {"status": "ignored", "message": "Evento no procesable"}
             
     except Exception as e:
-        logger.error(f"Error general en webhook: {str(e)}")
+        logger.error(f"Error en webhook de WhatsApp: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/webhook/whatsapp")
+async def verify_webhook(request: Request):
+    """
+    Endpoint para verificar el webhook de WhatsApp.
+    """
+    try:
+        # Obtener parámetros de la consulta
+        mode = request.query_params.get("hub.mode")
+        token = request.query_params.get("hub.verify_token")
+        challenge = request.query_params.get("hub.challenge")
+        
+        # Loguear para debugging
+        logger.info(f"Verificación de webhook recibida:")
+        logger.info(f"Mode: {mode}")
+        logger.info(f"Token recibido: {token}")
+        logger.info(f"Token esperado: {WHATSAPP_WEBHOOK_VERIFY_TOKEN}")
+        logger.info(f"Challenge: {challenge}")
+        
+        # Verificar modo y token
+        if mode and token and mode == "subscribe" and token == WHATSAPP_WEBHOOK_VERIFY_TOKEN:
+            if not challenge:
+                logger.error("Challenge no encontrado")
+                return {"status": "error", "message": "No challenge found"}
+                
+            logger.info(f"Verificación exitosa, devolviendo challenge: {challenge}")
+            return int(challenge)
+            
+        logger.error("Verificación fallida - Token o modo inválidos")
+        raise HTTPException(status_code=403, detail="Forbidden")
+            
+    except Exception as e:
+        logger.error(f"Error en verificación de webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/test-message")
 async def test_message():
     """
     Envía un mensaje de prueba al número de WhatsApp configurado en MY_PHONE_NUMBER.
-    
-    IMPORTANTE PARA TWILIO SANDBOX:
-    - En modo sandbox, Twilio SOLO permite enviar mensajes a números que se hayan unido previamente.
-    - Para unirse al sandbox, el usuario debe enviar un mensaje específico (ejemplo: "join apple-brown") 
-      desde su WhatsApp al número de Twilio.
-    - El código exacto de unión se encuentra en la consola de Twilio en la sección de WhatsApp Sandbox.
-    - Si no recibes el mensaje de prueba, verifica que hayas enviado el mensaje de unión correctamente.
     
     Returns:
         dict: Resultado del envío del mensaje de prueba
@@ -384,80 +422,61 @@ async def test_message():
         return {"error": "No se ha configurado MY_PHONE_NUMBER en las variables de entorno"}
     
     try:
-        if ENVIRONMENT == "development":
-            # En desarrollo (Twilio)
-            logging.info(f"Enviando mensaje de prueba vía Twilio a {MY_PHONE_NUMBER}")
+        # Verificar credenciales
+        if not WHATSAPP_API_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
+            return {"error": "Faltan credenciales de WhatsApp Business API en las variables de entorno"}
+        
+        # Formatear el número de teléfono según el formato de la API de WhatsApp
+        # (sin el signo '+', solo dígitos)
+        formatted_phone = MY_PHONE_NUMBER
+        # Eliminar el '+' si existe y cualquier otro caracter no numérico
+        formatted_phone = re.sub(r'[^0-9]', '', formatted_phone)
             
-            if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
-                return {"error": "Faltan credenciales de Twilio en las variables de entorno"}
-            
-            # Advertencia sobre sandbox de Twilio
-            logging.warning(
-                "MODO SANDBOX DE TWILIO ACTIVADO: Asegúrate de que el número "
-                f"{MY_PHONE_NUMBER} haya enviado el mensaje de unión al sandbox "
-                "desde la consola de Twilio. De lo contrario, NO recibirás mensajes."
-            )
-            
-            # Crear cliente de Twilio
-            client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-            
-            # Enviar mensaje
-            message = client.messages.create(
-                from_=f"whatsapp:{TWILIO_PHONE_NUMBER}",
-                body="¡Hola! Este es un mensaje de prueba del Chatbot UBA Medicina. Si lo recibes, la configuración es correcta.",
-                to=f"whatsapp:{MY_PHONE_NUMBER}"
-            )
-            
+        logger.info(f"Enviando mensaje de prueba a: {formatted_phone}")
+        
+        # Configurar headers para la API de WhatsApp
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        # Preparar datos del mensaje
+        data = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": formatted_phone,
+            "type": "text",
+            "text": {
+                "preview_url": False,
+                "body": "¡Hola! Este es un mensaje de prueba del Chatbot UBA Medicina. Si lo recibes, la configuración es correcta."
+            }
+        }
+        
+        # Enviar solicitud a la API de WhatsApp
+        response = requests.post(
+            f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages",
+            headers=headers,
+            json=data
+        )
+        
+        # Verificar respuesta
+        response_data = response.json()
+        
+        if response.status_code == 200:
             return {
                 "success": True,
-                "message_sid": message.sid,
-                "status": message.status,
-                "note": "Si no recibes el mensaje, verifica que hayas unido tu número al sandbox de Twilio"
+                "message_id": response_data.get("messages", [{}])[0].get("id"),
+                "status": "sent",
+                "whatsapp_api_response": response_data
             }
-        
-        elif ENVIRONMENT == "production":
-            # En producción (API oficial de WhatsApp)
-            logging.info(f"Enviando mensaje de prueba vía API oficial de WhatsApp a {MY_PHONE_NUMBER}")
-            
-            if not WHATSAPP_API_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
-                return {"error": "Faltan credenciales de WhatsApp Business API en las variables de entorno"}
-            
-            # Configurar headers para la API de WhatsApp
-            headers = {
-                "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
-                "Content-Type": "application/json"
+        else:
+            error_message = response_data.get('error', {}).get('message', 'Error desconocido')
+            error_code = response_data.get('error', {}).get('code', '')
+            return {
+                "success": False,
+                "error": f"Error al enviar mensaje: {error_message} (Código: {error_code})",
+                "details": response_data
             }
-            
-            # Preparar datos del mensaje
-            data = {
-                "messaging_product": "whatsapp",
-                "to": MY_PHONE_NUMBER,
-                "type": "text",
-                "text": {
-                    "body": "¡Hola! Este es un mensaje de prueba del Chatbot UBA Medicina. Si lo recibes, la configuración es correcta."
-                }
-            }
-            
-            # Enviar solicitud a la API de WhatsApp
-            response = requests.post(
-                f"https://graph.facebook.com/v13.0/{WHATSAPP_PHONE_NUMBER_ID}/messages",
-                headers=headers,
-                json=data
-            )
-            
-            # Verificar respuesta
-            if response.status_code == 200:
-                return {
-                    "success": True,
-                    "message_id": response.json().get("messages", [{}])[0].get("id"),
-                    "status": "sent"
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Error al enviar mensaje: {response.status_code}",
-                    "details": response.json()
-                }
     
     except Exception as e:
         logging.error(f"Error al enviar mensaje de prueba: {str(e)}")
@@ -467,28 +486,27 @@ async def test_message():
 async def health_check():
     """Endpoint para verificar el estado del servicio."""
     whatsapp_available = (
-        (WHATSAPP_PROVIDER == WhatsAppProvider.TWILIO and twilio_client is not None) or
-        (WHATSAPP_PROVIDER == WhatsAppProvider.OFFICIAL_API and 
-         WHATSAPP_API_TOKEN is not None and WHATSAPP_PHONE_NUMBER_ID is not None)
+        WHATSAPP_API_TOKEN is not None and 
+        WHATSAPP_PHONE_NUMBER_ID is not None and
+        WHATSAPP_BUSINESS_ACCOUNT_ID is not None and
+        WHATSAPP_WEBHOOK_VERIFY_TOKEN is not None
     )
     
     status_info = {
         "status": "healthy", 
         "environment": ENVIRONMENT,
-        "whatsapp_provider": WHATSAPP_PROVIDER,
         "whatsapp_available": whatsapp_available,
         "test_number_configured": MY_PHONE_NUMBER is not None,
         "model_path": model_path,
         "embeddings_dir": embeddings_dir
     }
     
-    # Añadir información sobre requisitos del sandbox de Twilio
-    if ENVIRONMENT == "development" and WHATSAPP_PROVIDER == WhatsAppProvider.TWILIO:
-        status_info["twilio_sandbox_info"] = {
-            "warning": "Estás usando el sandbox de Twilio para WhatsApp",
-            "join_requirement": "El número receptor debe enviar un mensaje de unión al sandbox",
-            "instructions": "Busca la sección 'WhatsApp Sandbox' en tu panel de Twilio para ver el código exacto",
-            "example": "El usuario debe enviar algo como 'join apple-brown' al número de Twilio"
+    # Añadir información sobre la configuración de WhatsApp
+    if whatsapp_available:
+        status_info["whatsapp_config"] = {
+            "phone_number_id": WHATSAPP_PHONE_NUMBER_ID,
+            "business_account_id": WHATSAPP_BUSINESS_ACCOUNT_ID,
+            "webhook_verify_token": "configured" if WHATSAPP_WEBHOOK_VERIFY_TOKEN else "missing"
         }
     
     return status_info
@@ -516,6 +534,164 @@ async def chat_endpoint(message: Dict[str, str]):
         logger.error(f"Error en endpoint de chat: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/whatsapp/message")
+async def receive_whatsapp_message(request: Request):
+    """
+    Endpoint para recibir mensajes de WhatsApp redireccionados desde Glitch.
+    
+    Este endpoint es llamado por el webhook de Glitch cuando recibe un mensaje.
+    """
+    # Agregar log de entrada para confirmar que se está llamando al endpoint
+    print("\n\n======= MENSAJE RECIBIDO EN /api/whatsapp/message =======\n\n")
+    logger.warning("======= MENSAJE RECIBIDO EN /api/whatsapp/message =======")
+    
+    try:
+        # Log de headers y query params para depuración
+        print(f"Headers: {dict(request.headers)}")
+        logger.warning(f"Headers: {dict(request.headers)}")
+        
+        # Obtener datos del mensaje como texto para depuración
+        body_bytes = await request.body()
+        body_text = body_bytes.decode('utf-8')
+        print(f"Cuerpo RAW: {body_text}")
+        
+        # Obtener datos del mensaje
+        try:
+            data = await request.json()
+            print(f"Datos JSON recibidos: {json.dumps(data, indent=2)}")
+        except Exception as e:
+            logger.error(f"Error al leer el cuerpo de la solicitud: {str(e)}")
+            return {"status": "error", "message": f"Error en JSON: {str(e)}", "body": body_text}
+        
+        # Intentar procesar el mensaje según el formato de webhook completo o el formato simplificado
+        message_body = ""
+        from_number = ""
+        
+        # Verificar si estamos recibiendo el webhook completo o solo el mensaje simplificado
+        if "object" in data and data.get("object") == "whatsapp_business_account":
+            # Formato webhook completo
+            print("Detectado formato de webhook completo")
+            try:
+                entry = data.get("entry", [])[0]
+                changes = entry.get("changes", [])[0]
+                value = changes.get("value", {})
+                
+                # Verificar si hay mensajes
+                if "messages" in value:
+                    message = value.get("messages", [])[0]
+                    message_body = message.get("text", {}).get("body", "")
+                    from_number = message.get("from", "")
+                    
+                    # Extraer ID del número de teléfono de negocio desde metadata
+                    business_phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
+                    
+                    print(f"Webhook completo - De: {from_number}, Mensaje: '{message_body}'")
+                else:
+                    # Puede ser un mensaje de estado (read, delivered, etc)
+                    print("Evento de estado recibido, no es un mensaje de texto")
+                    return {"status": "ignored", "message": "Evento de estado, no es un mensaje"}
+            except (IndexError, KeyError) as e:
+                print(f"Error al extraer datos del webhook completo: {str(e)}")
+                logger.error(f"Error al extraer datos del webhook: {str(e)}")
+                return {"status": "error", "message": f"Error en estructura de webhook: {str(e)}"}
+        else:
+            # Formato simplificado que envía server.js actualmente
+            message = data.get("message", {})
+            
+            if "text" in message:
+                message_body = message.get("text", {}).get("body", "")
+                from_number = message.get("from", "")
+            
+            business_phone_number_id = data.get("business_phone_number_id", "")
+            print(f"Formato simplificado - De: {from_number}, Mensaje: '{message_body}'")
+        
+        # Log de los datos extraídos
+        print(f"Mensaje extraído - De: {from_number}, Cuerpo: '{message_body}'")
+        logger.warning(f"Mensaje de: {from_number}, Contenido: '{message_body}'")
+        
+        if not message_body or not from_number:
+            print("Error: Mensaje sin cuerpo o remitente")
+            logger.warning("Mensaje recibido sin cuerpo o remitente")
+            return {"status": "error", "message": "Datos incompletos", "received_data": data}
+        
+        # Normalizar el número del remitente
+        whatsapp_handler = get_whatsapp_handler()
+        from_number = whatsapp_handler.normalize_phone_number(from_number)
+        logger.warning(f"Número normalizado: {from_number}")
+        
+        # Respuesta simple sin usar RAG para verificar que la comunicación funciona
+        print("Enviando respuesta simple directa...")
+        logger.warning("Enviando respuesta simple directa...")
+        response_text = f"Hola! Recibí tu mensaje: '{message_body}'. [Respuesta de prueba]"
+        
+        # Enviar respuesta por WhatsApp
+        try:
+            send_result = await whatsapp_handler.send_message(
+                from_number,
+                response_text
+            )
+            print(f"Resultado del envío: {json.dumps(send_result, indent=2)}")
+            
+            return {
+                "status": "success",
+                "message": "Respuesta de prueba enviada",
+                "response_text": response_text,
+                "details": send_result
+            }
+        except Exception as e:
+            print(f"Error al enviar: {str(e)}")
+            logger.error(f"Error al enviar mensaje: {str(e)}", exc_info=True)
+            return {"status": "error", "message": f"Error al enviar: {str(e)}"}
+        
+    except Exception as e:
+        print(f"Error general: {str(e)}")
+        logger.error(f"Error al procesar mensaje de Glitch: {str(e)}", exc_info=True)
+        import traceback
+        return {
+            "status": "error", 
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+@app.get("/test-webhook")
+async def test_webhook():
+    """Endpoint para probar la conexión directamente."""
+    logger.warning("Endpoint de prueba /test-webhook llamado")
+    
+    try:
+        # Verificar que podemos enviar mensajes
+        if MY_PHONE_NUMBER:
+            try:
+                formatted_phone = re.sub(r'[^0-9]', '', MY_PHONE_NUMBER)
+                
+                whatsapp_handler = get_whatsapp_handler()
+                result = await whatsapp_handler.send_message(
+                    formatted_phone,
+                    "Este es un mensaje de prueba directo desde el endpoint /test-webhook."
+                )
+                
+                if result.get('status') == 'success':
+                    return {
+                        "status": "success",
+                        "message": "Mensaje de prueba enviado directamente",
+                        "to": formatted_phone,
+                        "details": result
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": "Error al enviar mensaje de prueba",
+                        "details": result
+                    }
+            except Exception as e:
+                logger.error(f"Error al enviar mensaje directo: {str(e)}", exc_info=True)
+                return {"status": "error", "message": str(e)}
+        else:
+            return {"status": "error", "message": "No hay número de teléfono configurado para pruebas"}
+    except Exception as e:
+        logger.error(f"Error en test-webhook: {str(e)}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
 def main():
     """Función principal para ejecutar el servidor."""
     # Configuración del servidor desde variables de entorno
@@ -524,7 +700,6 @@ def main():
     
     logger.info(f"Iniciando servidor en {host}:{port}")
     logger.info(f"Entorno: {ENVIRONMENT}")
-    logger.info(f"Proveedor de WhatsApp: {WHATSAPP_PROVIDER}")
     logger.info(f"Ruta del modelo: {model_path}")
     logger.info(f"Ruta de embeddings: {embeddings_dir}")
     if MY_PHONE_NUMBER:
