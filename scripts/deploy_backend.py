@@ -35,6 +35,10 @@ WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv('WHATSAPP_WEBHOOK_VERIFY_TOKEN')
 # Número de teléfono para pruebas
 MY_PHONE_NUMBER = os.getenv('MY_PHONE_NUMBER')
 
+# Inicialización de variables globales
+rag_system = None
+rag_initialized = False
+
 # Clase para manejar envío de mensajes de WhatsApp
 class WhatsAppHandler:
     def __init__(self, api_token: str, phone_number_id: str, business_account_id: str):
@@ -247,30 +251,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicializar sistema RAG (usar variables de entorno)
-model_path = os.getenv('MODEL_PATH', 'models/finetuned_model')
-embeddings_dir = os.getenv('EMBEDDINGS_DIR', 'data/embeddings')
-
-# Inicializar RAG con manejo de errores
-try:
-    logger.info(f"Inicializando sistema RAG con model_path={model_path}, embeddings_dir={embeddings_dir}")
-    rag_system = RAGSystem(model_path, embeddings_dir)
-    rag_initialized = True
-    logger.info("Sistema RAG inicializado correctamente")
-except Exception as e:
-    logger.error(f"Error al inicializar RAG: {str(e)}", exc_info=True)
-    logger.warning("Usando sistema de respuesta alternativo")
-    rag_initialized = False
-    
-    # Crear función alternativa simple para desarrollo
-    class FallbackRAG:
-        def process_query(self, query):
-            logger.info(f"Usando sistema fallback para query: {query}")
-            return {
-                "response": f"Recibí tu mensaje: '{query}'. El sistema RAG está en mantenimiento, pero podemos conversar de manera básica."
-            }
-    
-    rag_system = FallbackRAG()
+@app.on_event("startup")
+async def startup_event():
+    """
+    Inicializa el sistema RAG al iniciar la aplicación
+    """
+    try:
+        global rag_system, rag_initialized
+        logger.info("Iniciando sistema RAG...")
+        rag_system = RAGSystem(
+            embeddings_dir='data/embeddings',
+            device='mps'  # Usar MPS en Mac, 'cuda' para GPU NVIDIA, 'cpu' para otros
+        )
+        rag_initialized = True
+        logger.info("Sistema RAG inicializado correctamente")
+    except Exception as e:
+        logger.error(f"Error al inicializar sistema RAG: {str(e)}", exc_info=True)
+        rag_initialized = False
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
@@ -517,8 +514,8 @@ async def health_check():
         "environment": ENVIRONMENT,
         "whatsapp_available": whatsapp_available,
         "test_number_configured": MY_PHONE_NUMBER is not None,
-        "model_path": model_path,
-        "embeddings_dir": embeddings_dir
+        "model_path": "data/embeddings",
+        "embeddings_dir": "data/embeddings"
     }
     
     # Añadir información sobre la configuración de WhatsApp
@@ -534,25 +531,73 @@ async def health_check():
 @app.post("/chat")
 async def chat_endpoint(message: Dict[str, str]):
     """
-    Endpoint para probar el chatbot sin WhatsApp.
-    
-    Args:
-        message (Dict[str, str]): Diccionario con el mensaje
-        
-    Returns:
-        Dict: Respuesta del chatbot
+    Endpoint para el chat web que usa el sistema RAG mejorado.
     """
     try:
-        query = message.get("message")
+        query = message.get('message', '').strip()
         if not query:
-            raise HTTPException(status_code=400, detail="Mensaje no proporcionado")
+            raise HTTPException(status_code=400, detail="Mensaje vacío")
             
-        result = rag_system.process_query(query)
-        return result
+        logger.info(f"Consulta recibida: {query}")
         
+        # Procesar la consulta con el sistema RAG
+        try:
+            # Usar la instancia global de RAG si existe
+            global rag_system
+            if not rag_initialized:
+                logger.error("Sistema RAG no inicializado")
+                return {
+                    "query": query,
+                    "response": "Lo siento, el sistema está en mantenimiento. Por favor, intenta más tarde.",
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # Obtener respuesta del sistema RAG
+            response = rag_system.process_query(query)
+            
+            # Verificar si se encontraron chunks relevantes
+            if not response.get('relevant_chunks'):
+                logger.warning("No se encontraron chunks relevantes")
+                return {
+                    "query": query,
+                    "response": "Lo siento, no encontré información relevante para responder tu pregunta. ¿Podrías reformularla?",
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # Extraer fuentes únicas
+            sources = list(set(chunk['filename'].replace('.pdf', '') 
+                             for chunk in response['relevant_chunks']))
+            
+            # Logging de resultados
+            logger.info(f"Chunks relevantes encontrados: {len(response['relevant_chunks'])}")
+            logger.info(f"Fuentes utilizadas: {sources}")
+            
+            return {
+                "query": query,
+                "response": response['response'],
+                "relevant_chunks": response['relevant_chunks'],
+                "sources": sources
+            }
+            
+        except Exception as e:
+            logger.error(f"Error al procesar consulta con RAG: {str(e)}", exc_info=True)
+            return {
+                "query": query,
+                "response": "Lo siento, ocurrió un error al procesar tu consulta. Por favor, intenta de nuevo.",
+                "relevant_chunks": [],
+                "sources": []
+            }
+            
     except Exception as e:
-        logger.error(f"Error en endpoint de chat: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error general en endpoint /chat: {str(e)}", exc_info=True)
+        return {
+            "query": query if 'query' in locals() else "",
+            "response": "Error interno del servidor. Por favor, intenta más tarde.",
+            "relevant_chunks": [],
+            "sources": []
+        }
 
 @app.post("/api/whatsapp/message")
 async def receive_whatsapp_message(request: Request):
@@ -718,8 +763,8 @@ def main():
     
     logger.info(f"Iniciando servidor en {host}:{port}")
     logger.info(f"Entorno: {ENVIRONMENT}")
-    logger.info(f"Ruta del modelo: {model_path}")
-    logger.info(f"Ruta de embeddings: {embeddings_dir}")
+    logger.info(f"Ruta del modelo: data/embeddings")
+    logger.info(f"Ruta de embeddings: data/embeddings")
     if MY_PHONE_NUMBER:
         logger.info(f"Número de prueba configurado: {MY_PHONE_NUMBER}")
     

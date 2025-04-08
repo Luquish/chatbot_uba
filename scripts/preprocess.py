@@ -17,7 +17,7 @@ from pdfminer.pdfparser import PDFParser
 # Configuración de logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -96,12 +96,12 @@ class DocumentPreprocessor:
         text = ''.join(char for char in text if char == '\n' or char == '\t' or char.isprintable())
         
         # Reemplazar múltiples espacios en blanco por uno solo
-        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'[ \t]+', ' ', text)
         
         # Reemplazar múltiples saltos de línea por uno solo
-        text = re.sub(r'\n+', '\n', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
         
-        # Eliminar espacios alrededor de cada línea
+        # Eliminar espacios al inicio y final de cada línea
         lines = [line.strip() for line in text.split('\n')]
         text = '\n'.join(lines)
         
@@ -111,116 +111,207 @@ class DocumentPreprocessor:
         
         return text.strip()
 
-    def split_into_chunks(self, text: str, filename: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+    def convert_to_markdown(self, text: str) -> str:
         """
-        Divide el texto en chunks con solapamiento para preservar el contexto.
-        Utiliza párrafos como delimitadores naturales cuando es posible.
+        Convierte el texto extraído del PDF a formato Markdown.
         
         Args:
-            text (str): Texto a dividir
-            filename (str): Nombre del archivo (para mejorar chunking basado en tipo de documento)
-            chunk_size (int): Tamaño objetivo de cada chunk
-            overlap (int): Cantidad de palabras de solapamiento entre chunks
+            text (str): Texto extraído del PDF
             
         Returns:
-            List[str]: Lista de chunks
+            str: Texto en formato Markdown
         """
         if not text:
-            return []
-            
-        # Dividir por párrafos (separados por líneas en blanco)
-        paragraphs = re.split(r'\n\s*\n', text)
-        paragraphs = [p.strip() for p in paragraphs if p.strip()]
+            return ""
         
-        logger.info(f"Documento dividido en {len(paragraphs)} párrafos")
+        # Patrones para identificar estructura
+        title_pattern = re.compile(r'^[A-Z][A-Z\s]{10,}(?:\n|$)')
+        article_pattern = re.compile(r'^Art(?:ículo|\.)\s*(\d+\º?)\.?', re.IGNORECASE)
+        section_pattern = re.compile(r'^(?:CAPÍTULO|TÍTULO|SECCIÓN)\s+([IVX\d]+)\.?', re.IGNORECASE)
+        subsection_pattern = re.compile(r'^(?:[a-z]\)|[0-9]+\.|[A-Z]\))', re.IGNORECASE)
         
-        # Si tenemos artículos numerados (como en reglamentos), detectarlos
-        is_article_based = False
-        article_pattern = re.compile(r'artículo\s+\d+', re.IGNORECASE)
+        # Dividir el texto en párrafos
+        paragraphs = text.split('\n\n')
+        markdown_lines = []
+        in_list = False
         
-        # Verificar si el documento está basado en artículos
-        article_count = sum(1 for p in paragraphs if article_pattern.search(p))
-        if article_count > 2 or 'reglamento' in filename.lower() or 'condiciones' in filename.lower():
-            is_article_based = True
-            logger.info(f"Documento basado en artículos detectado: {filename}")
-        
-        chunks = []
-        current_chunk = []
-        current_size = 0
-        
-        # Función para agregar un chunk completo
-        def add_chunk():
-            if current_chunk:
-                chunk_text = ' '.join(current_chunk)
-                # Incluir información del archivo en el chunk
-                doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                chunks.append(doc_prefix + chunk_text)
-                logger.debug(f"Chunk creado: {len(chunk_text)} caracteres")
-        
-        # Si el documento está basado en artículos, intentar mantener artículos juntos
-        if is_article_based:
-            current_article = None
-            article_chunks = []
-            
-            for paragraph in paragraphs:
-                # Comprobar si este párrafo comienza un nuevo artículo
-                article_match = article_pattern.search(paragraph)
+        for paragraph in paragraphs:
+            lines = paragraph.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    markdown_lines.append('')
+                    continue
                 
+                # Títulos principales
+                if title_pattern.match(line):
+                    if markdown_lines and markdown_lines[-1] != '':
+                        markdown_lines.append('')
+                    markdown_lines.append(f"# {line}")
+                    markdown_lines.append('')
+                    continue
+                
+                # Secciones
+                section_match = section_pattern.match(line)
+                if section_match:
+                    if markdown_lines and markdown_lines[-1] != '':
+                        markdown_lines.append('')
+                    markdown_lines.append(f"## {line}")
+                    markdown_lines.append('')
+                    continue
+                
+                # Artículos
+                article_match = article_pattern.match(line)
                 if article_match:
-                    # Si teníamos un artículo anterior, lo agregamos como chunk
-                    if current_article:
-                        article_chunks.append(current_article)
-                    current_article = paragraph
-                elif current_article:
-                    # Añadir al artículo actual
-                    current_article += " " + paragraph
-                else:
-                    # Párrafo que no pertenece a ningún artículo
-                    article_chunks.append(paragraph)
+                    if markdown_lines and markdown_lines[-1] != '':
+                        markdown_lines.append('')
+                    markdown_lines.append(f"### {line}")
+                    markdown_lines.append('')
+                    continue
+                
+                # Subsecciones y listas
+                subsection_match = subsection_pattern.match(line)
+                if subsection_match:
+                    if not in_list:
+                        if markdown_lines and markdown_lines[-1] != '':
+                            markdown_lines.append('')
+                        in_list = True
+                    markdown_lines.append(f"- {line}")
+                    continue
+                
+                # Texto normal
+                if in_list and not subsection_match:
+                    in_list = False
+                    markdown_lines.append('')
+                markdown_lines.append(line)
             
-            # Añadir el último artículo
-            if current_article:
-                article_chunks.append(current_article)
-            
-            # Procesar los chunks basados en artículos
-            for article_text in article_chunks:
-                words = article_text.split()
-                if len(words) <= chunk_size * 1.5:  # Si es menos de 1.5 veces el tamaño objetivo
-                    doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                    chunks.append(doc_prefix + article_text)
-                else:
-                    # El artículo es demasiado largo, dividirlo respetando el tamaño de chunk
-                    for i in range(0, len(words), chunk_size - overlap):
-                        chunk = ' '.join(words[i:i + chunk_size])
-                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                        chunks.append(doc_prefix + chunk)
-        else:
-            # Método estándar basado en palabras con overlap
-            words = text.split()
-            
-            for i in range(0, len(words), chunk_size - overlap):
-                chunk = ' '.join(words[i:i + chunk_size])
+            # Agregar línea en blanco entre párrafos
+            if markdown_lines and markdown_lines[-1] != '':
+                markdown_lines.append('')
+        
+        return '\n'.join(markdown_lines)
+
+    def split_into_chunks(self, text: str, filename: str, chunk_size: int = 250, overlap: int = 50) -> List[str]:
+        if not text:
+            return []
+        
+        # Patrones para identificar estructura del documento
+        article_pattern = re.compile(r'(?i)(?:^|\n)(?:Art(?:ículo|\.)\s*\d+\º?\.?)', re.MULTILINE)
+        section_pattern = re.compile(r'(?i)(?:^|\n)(?:CAPÍTULO|TÍTULO|SECCIÓN)\s+[IVX\d]+\.?', re.MULTILINE)
+        subsection_pattern = re.compile(r'(?i)(?:^|\n)(?:[a-z]\)|[0-9]+\.|[A-Z]\))', re.MULTILINE)
+        
+        # Primero dividir por artículos
+        chunks = []
+        article_matches = list(article_pattern.finditer(text))
+        
+        if not article_matches:
+            # Si no hay artículos, tratar todo el texto como un chunk
+            if len(text.split()) <= chunk_size:
                 doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                chunks.append(doc_prefix + chunk)
-        
-        # Asegurar que los chunks no sean demasiado pequeños
-        final_chunks = []
-        for chunk in chunks:
-            if len(chunk.split()) >= 50:  # Mínimo 50 palabras por chunk
-                final_chunks.append(chunk)
+                chunks.append(doc_prefix + text)
             else:
-                # Si es muy pequeño y hay chunks previos, agregarlo al anterior
-                if final_chunks:
-                    final_chunks[-1] += " " + chunk
-                else:
-                    final_chunks.append(chunk)
+                # Dividir por párrafos
+                paragraphs = text.split('\n\n')
+                current_chunk = []
+                current_size = 0
+                
+                for paragraph in paragraphs:
+                    words = paragraph.split()
+                    if current_size + len(words) <= chunk_size:
+                        current_chunk.append(paragraph)
+                        current_size += len(words)
+                    else:
+                        if current_chunk:
+                            doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                            chunks.append(doc_prefix + '\n\n'.join(current_chunk))
+                        current_chunk = [paragraph]
+                        current_size = len(words)
+                
+                if current_chunk:
+                    doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                    chunks.append(doc_prefix + '\n\n'.join(current_chunk))
+        else:
+            # Procesar cada artículo
+            for i, match in enumerate(article_matches):
+                start = match.start()
+                end = article_matches[i + 1].start() if i + 1 < len(article_matches) else len(text)
+                article_text = text[start:end].strip()
+                
+                # Dividir el artículo en subsecciones si es necesario
+                subsections = []
+                current_subsection = []
+                
+                for line in article_text.split('\n'):
+                    if subsection_pattern.match(line) and current_subsection:
+                        subsections.append('\n'.join(current_subsection))
+                        current_subsection = []
+                    current_subsection.append(line)
+                
+                if current_subsection:
+                    subsections.append('\n'.join(current_subsection))
+                
+                if not subsections:
+                    subsections = [article_text]
+                
+                # Procesar cada subsección
+                for subsection in subsections:
+                    words = subsection.split()
+                    if len(words) <= chunk_size:
+                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                        chunks.append(doc_prefix + subsection)
+                    else:
+                        # Dividir subsección grande en chunks más pequeños
+                        current_chunk = []
+                        current_size = 0
+                        
+                        for word in words:
+                            current_chunk.append(word)
+                            current_size += 1
+                            
+                            if current_size >= chunk_size:
+                                # Buscar un punto final cercano
+                                look_back = min(10, len(current_chunk))
+                                cut_point = -1
+                                
+                                for j in range(look_back):
+                                    if current_chunk[-j-1].endswith('.'):
+                                        cut_point = len(current_chunk) - j - 1
+                                        break
+                                
+                                if cut_point == -1:
+                                    cut_point = len(current_chunk)
+                                
+                                doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                                chunks.append(doc_prefix + ' '.join(current_chunk[:cut_point]))
+                                
+                                # Mantener palabras para contexto
+                                current_chunk = current_chunk[max(0, cut_point-overlap):]
+                                current_size = len(current_chunk)
+                        
+                        if current_chunk:
+                            doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                            chunks.append(doc_prefix + ' '.join(current_chunk))
         
-        logger.info(f"Documento dividido en {len(final_chunks)} chunks")
-        return final_chunks
+        # Post-procesamiento para evitar chunks muy pequeños
+        processed_chunks = []
+        min_chunk_size = 50  # palabras
+        
+        for i, chunk in enumerate(chunks):
+            chunk_words = chunk.split()
+            if len(chunk_words) < min_chunk_size and i > 0:
+                # Combinar chunks pequeños con el anterior
+                previous_chunk = processed_chunks[-1]
+                combined_chunk = previous_chunk + " " + chunk
+                processed_chunks[-1] = combined_chunk
+            else:
+                processed_chunks.append(chunk)
+        
+        logger.info(f"Documento dividido en {len(processed_chunks)} chunks")
+        return processed_chunks
 
     def process_document(self, pdf_path: Path) -> Dict:
         """
-        Procesa un documento PDF completo con mejor logging e información.
+        Procesa un documento PDF y lo convierte a Markdown.
         
         Args:
             pdf_path (Path): Ruta al archivo PDF
@@ -230,31 +321,111 @@ class DocumentPreprocessor:
         """
         logger.info(f"Procesando documento: {pdf_path}")
         
+        # Extraer texto del PDF
         text = self.extract_text_from_pdf(pdf_path)
         if not text:
             logger.error(f"No se pudo extraer texto de {pdf_path}")
             return None
-            
-        # Loguear primeros 100 caracteres para verificación
-        logger.info(f"Muestra de texto extraído: {text[:100]}...")
         
+        # Limpiar texto
         clean_text = self.clean_text(text)
-        logger.info(f"Texto limpiado: {len(clean_text)} caracteres")
         
-        # Loguear primeros 100 caracteres de texto limpio para verificación
-        logger.info(f"Muestra de texto limpio: {clean_text[:100]}...")
+        # Convertir a Markdown
+        markdown_text = self.convert_to_markdown(clean_text)
         
-        chunks = self.split_into_chunks(clean_text, pdf_path.name)
+        # Guardar archivo Markdown
+        markdown_path = self.processed_dir / f"{pdf_path.stem}.md"
+        with open(markdown_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_text)
+        logger.info(f"Archivo Markdown guardado en: {markdown_path}")
+        
+        # Generar chunks basados en la estructura Markdown
+        chunks = self.split_markdown_into_chunks(markdown_text, pdf_path.name)
         
         word_count = len(clean_text.split())
         logger.info(f"Documento procesado: {word_count} palabras, {len(chunks)} chunks")
         
         return {
             'filename': pdf_path.name,
+            'markdown_file': str(markdown_path),
             'num_chunks': len(chunks),
             'total_words': word_count,
             'chunks': chunks
         }
+
+    def split_markdown_into_chunks(self, markdown_text: str, filename: str, chunk_size: int = 250, overlap: int = 50) -> List[str]:
+        """
+        Divide el texto Markdown en chunks respetando la estructura del documento.
+        
+        Args:
+            markdown_text (str): Texto en formato Markdown
+            filename (str): Nombre del archivo original
+            chunk_size (int): Tamaño objetivo de cada chunk
+            overlap (int): Cantidad de palabras de solapamiento
+            
+        Returns:
+            List[str]: Lista de chunks
+        """
+        if not markdown_text:
+            return []
+        
+        chunks = []
+        current_section = []
+        current_size = 0
+        
+        lines = markdown_text.split('\n')
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Si es un encabezado, comenzar nuevo chunk
+            if line.startswith('#'):
+                if current_section:
+                    doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                    chunks.append(doc_prefix + '\n'.join(current_section))
+                current_section = [line]
+                current_size = len(line.split())
+                i += 1
+                continue
+            
+            # Si la línea está vacía, mantener el formato
+            if not line:
+                current_section.append('')
+                i += 1
+                continue
+            
+            # Agregar líneas hasta alcanzar el tamaño del chunk
+            words = line.split()
+            if current_size + len(words) <= chunk_size:
+                current_section.append(line)
+                current_size += len(words)
+                i += 1
+            else:
+                # Si el chunk actual está vacío, forzar la inclusión de la línea
+                if not current_section:
+                    current_section.append(line)
+                    i += 1
+                
+                # Guardar chunk actual
+                if current_section:
+                    doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                    chunks.append(doc_prefix + '\n'.join(current_section))
+                
+                # Mantener contexto para el siguiente chunk
+                current_section = []
+                for j in range(max(0, i - overlap), i):
+                    if lines[j].startswith('#'):
+                        current_section.append(lines[j])
+                current_size = sum(len(line.split()) for line in current_section)
+        
+        # Agregar el último chunk si existe
+        if current_section:
+            doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+            chunks.append(doc_prefix + '\n'.join(current_section))
+        
+        logger.info(f"Documento dividido en {len(chunks)} chunks")
+        return chunks
 
     def process_all_documents(self):
         """Procesa todos los documentos PDF en el directorio raw con mejor manejo de errores."""

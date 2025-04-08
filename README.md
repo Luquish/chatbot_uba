@@ -1,138 +1,133 @@
-# Chatbot UBA Medicina
+# UBA Administrative Chatbot Template
 
-Chatbot educativo para la Facultad de Medicina de la UBA, diseñado para asistir a aproximadamente 127,000 estudiantes con consultas administrativas.
+A template for building educational chatbots for administrative support at any faculty of the University of Buenos Aires (UBA). This project implements a WhatsApp-based chatbot that uses RAG (Retrieval Augmented Generation) to provide accurate and contextual responses to administrative queries.
 
-## Estructura del Proyecto
+## Project Overview
 
-El proyecto está organizado en los siguientes scripts principales:
+This project aims to develop a template for creating administrative support chatbots for any faculty at the University of Buenos Aires. At its core, it's a RAG (Retrieval-Augmented Generation) system that integrates the following functionalities:
 
-1. **Preprocesamiento de Datos** (`scripts/preprocess.py`):
-   - Extrae texto de documentos PDF
-   - Limpia y segmenta el texto
-   - Prepara los datos para la generación de embeddings
+### Document Preprocessing
+- Extracts and cleans text from PDF documents (e.g., regularity conditions, disciplinary regulations)
+- Segments text into chunks with overlap to maintain context
+- Generates metadata for each chunk
+- Easily adaptable to any faculty's specific documentation
 
-2. **Generación de Embeddings** (`scripts/create_embeddings.py`):
-   - Crea embeddings vectoriales del texto procesado
-   - Almacena los embeddings en FAISS para desarrollo
-   - Utiliza Pinecone para producción
+### Embeddings Generation and Context Retrieval
+- Uses multilingual models (like sentence-transformers) to transform chunks into embeddings
+- Indexes locally with FAISS for testing
+- Can be configured to use Pinecone in production
+- Enables relevant information retrieval in response to student queries
+- Supports both Spanish and local Argentine expressions
 
-3. **Fine-tuning del Modelo** (`scripts/train_finetune.py`):
-   - Adapta el modelo base usando técnicas LoRA/QLoRA
-   - Optimiza el modelo para el dominio específico
+### Modeling and Fine-Tuning
+- Works with open-source LLMs (like Mistral or lighter alternatives based on resource availability)
+- Implements LoRA fine-tuning to adapt the model to:
+  - Administrative context and language
+  - Interaction examples
+  - Local expressions (Argentine Spanish)
+  - Faculty-specific terminology
 
-4. **Sistema RAG** (`scripts/run_rag.py`):
-   - Maneja consultas de usuarios
-   - Recupera información relevante
-   - Genera respuestas contextuales
+### Backend and API
+- Built with FastAPI for asynchronous and scalable request handling
+- Direct integration with WhatsApp Cloud API for messaging
+- Robust error handling and logging
+- Easy to configure and deploy
 
-5. **Backend y API** (`scripts/deploy_backend.py`):
-   - Implementa el backend con FastAPI
-   - Gestiona la integración con WhatsApp Business API
+### System Integration
+The complete flow works as follows:
+1. Student sends a query via WhatsApp
+2. WhatsApp Cloud API forwards the message to our FastAPI backend
+3. RAG system queries the embeddings index to retrieve relevant context from processed documents
+4. Fine-tuned LLM generates a response combining the context and query
+5. Response is sent back to the student through WhatsApp
 
-## Configuración
+### Key Features
+- WhatsApp Business API integration
+- RAG-based response generation
+- Fine-tuned language model
+- Automatic setup and deployment
+- Robust error handling
+- Detailed logging
+- Easy customization for different faculties
 
-### Variables de Entorno
+This template provides a reliable and scalable tool that combines natural language processing, information retrieval, and messaging (through WhatsApp) to provide administrative support to UBA students, adaptable to any faculty's specific needs and documentation.
 
-Crear un archivo `.env` con las siguientes variables:
+## Features
 
-```env
-# Entorno
-ENVIRONMENT=development  # o production
+- WhatsApp Business API integration
+- RAG-based response generation
+- Fine-tuned language model
+- Automatic setup and deployment
+- Robust error handling
+- Detailed logging
 
-# WhatsApp Business API
-WHATSAPP_API_TOKEN=your_api_token
-WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
-WHATSAPP_BUSINESS_ACCOUNT_ID=your_business_account_id
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_webhook_verify_token
+## Project Structure
 
-# Número de teléfono para pruebas
-MY_PHONE_NUMBER=your_test_phone_number
-
-# Modelo y embeddings
-MODEL_PATH=models/finetuned_model
-EMBEDDINGS_DIR=data/embeddings
-
-# Servidor
-HOST=0.0.0.0
-PORT=8000
+```
+.
+├── data/
+│   ├── raw/           # Raw data files
+│   ├── processed/     # Processed data
+│   └── embeddings/    # Generated embeddings
+├── models/            # Model files
+├── scripts/           # Python scripts
+│   ├── auto_setup.py  # Automatic setup
+│   ├── create_embeddings.py  # Embedding generation
+│   ├── deploy_backend.py     # Backend deployment
+│   ├── preprocess.py  # Data preprocessing
+│   ├── run_rag.py     # RAG system
+│   └── train_finetune.py  # Model fine-tuning
+└── logs/              # Log files
 ```
 
-### Configuración de WhatsApp
+## Setup
 
-1. Crear una cuenta de negocio en [Meta Business Manager](https://business.facebook.com/)
-2. Configurar la API de WhatsApp Business:
-   - Obtener el token de acceso
-   - Registrar el número de teléfono
-   - Obtener el ID del número de teléfono
-   - Obtener el ID de la cuenta de negocio
-
-3. Configurar el webhook:
-   - URL: `https://tu-dominio.com/webhook/whatsapp`
-   - Token de verificación: usar el valor de `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
-   - Eventos a suscribir:
-     - messages
-     - message_template_status_updates
-
-## Instalación
-
-1. Clonar el repositorio:
+1. Clone the repository:
 ```bash
-git clone https://github.com/tu-usuario/chatbot_uba.git
+git clone https://github.com/yourusername/chatbot_uba.git
 cd chatbot_uba
 ```
 
-2. Crear y activar un entorno virtual:
-```bash
-python -m venv venv
-source venv/bin/activate  # En Windows: venv\Scripts\activate
-```
-
-3. Instalar dependencias:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Uso
-
-### Desarrollo
-
-1. Iniciar el servidor de desarrollo:
-```bash
-python scripts/deploy_backend.py
+3. Configure environment variables in `.env`:
+```
+ENVIRONMENT=development
+MODEL_PATH=models/finetuned_model
+EMBEDDINGS_DIR=data/embeddings
+WHATSAPP_API_TOKEN=your_token
+WHATSAPP_PHONE_NUMBER_ID=your_phone_id
+WHATSAPP_BUSINESS_ACCOUNT_ID=your_account_id
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_verify_token
+MY_PHONE_NUMBER=your_test_number
+HUGGING_FACE_HUB_TOKEN=your_huggingface_token  # Required for model inference
 ```
 
-2. Probar el chatbot:
-   - Usar el endpoint `/chat` para pruebas sin WhatsApp
-   - Usar el endpoint `/test-message` para enviar mensajes de prueba
-   - Verificar el estado del servicio con `/health`
-
-### Producción
-
-1. Configurar el entorno de producción:
-   - Actualizar las variables de entorno
-   - Configurar el servidor web (Nginx, Apache, etc.)
-   - Configurar SSL/TLS
-
-2. Iniciar el servidor:
+4. Run the auto setup script:
 ```bash
-ENVIRONMENT=production python scripts/deploy_backend.py
+python scripts/auto_setup.py
 ```
 
-## Seguridad
+This script will:
+- Start the backend server (deploy_backend.py)
+- Configure ngrok to create a public URL
+- Verify WhatsApp token validity
+- Display instructions for Glitch configuration
+- Keep services running for development
+- Handle graceful shutdown on Ctrl+C
 
-- Validación HMAC SHA256 para webhooks
-- Manejo seguro de tokens
-- Logging detallado para monitoreo
-- Validación de solicitudes
+The script will show you:
+- The local backend URL (http://localhost:8000)
+- The ngrok public URL for Glitch configuration
+- Instructions for setting up the webhook in Meta
+- Instructions for configuring Glitch variables
 
-## Contribución
+Keep this script running during development to maintain the backend and ngrok tunnel active.
 
-1. Fork el repositorio
-2. Crear una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abrir un Pull Request
+## Development
 
-## Licencia
-
-Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para más detalles.
+1. Start the backend server:
+```

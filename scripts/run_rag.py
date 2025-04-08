@@ -3,7 +3,7 @@ import logging
 import json
 import requests
 from pathlib import Path
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Any
 import torch
 import faiss
 import pandas as pd
@@ -16,15 +16,31 @@ import huggingface_hub
 import psutil  # Añadido para verificar la memoria disponible
 import re
 
-# Cargar variables de entorno
-load_dotenv()
+# Crear directorio de logs si no existe
+log_dir = Path('logs')
+log_dir.mkdir(exist_ok=True)
 
-# Configuración de logging
+# Lista de palabras de saludo
+greeting_words = ['hola', 'buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias', 
+                'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
+
+# Lista de emojis para enriquecer las respuestas
+information_emojis = ["📚", "📖", "ℹ️", "📊", "🔍", "📝", "📋", "📈", "📌", "🧠"]
+greeting_emojis = ["👋", "😊", "🤓", "👨‍⚕️", "👩‍⚕️", "🎓", "🌟"]
+
+# Configurar logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Salida a consola
+        logging.FileHandler(log_dir / 'app.log')  # Salida a archivo
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Configurar token de Hugging Face si está disponible
 if "HUGGING_FACE_HUB_TOKEN" in os.environ:
@@ -94,9 +110,12 @@ class FAISSVectorStore(VectorStore):
         self.metadata = pd.read_csv(metadata_path)
         logger.info(f"Índice FAISS cargado con {self.index.ntotal} vectores")
     
-    def search(self, query_embedding: List[float], k: int) -> List[Dict]:
+        # Umbral de similitud mínimo (ajustable según necesidad)
+        self.similarity_threshold = 0.1  # Reducido de 0.6 a 0.1 para ser más permisivo
+    
+    def search(self, query_embedding: List[float], k: int = 5) -> List[Dict]:
         """
-        Búsqueda de vectores similares en FAISS.
+        Búsqueda de vectores similares en FAISS con mejoras.
         
         Args:
             query_embedding (List[float]): Embedding de la consulta
@@ -105,21 +124,50 @@ class FAISSVectorStore(VectorStore):
         Returns:
             List[Dict]: Lista de resultados con metadatos
         """
-        # Convertir a numpy y formato correcto
+        # Convertir a numpy y normalizar
         query_embedding_np = np.array(query_embedding).reshape(1, -1).astype('float32')
+        faiss.normalize_L2(query_embedding_np)
         
         # Realizar búsqueda
         distances, indices = self.index.search(query_embedding_np, k)
         
-        # Obtener metadatos y resultados
+        # Convertir distancias L2 a similitud coseno
+        similarities = np.clip(1 - distances[0] / 2, 0, 1)  # Asegurar rango [0,1]
+        
+        # Filtrar por umbral y ordenar por similitud
         results = []
-        for idx, distance in zip(indices[0], distances[0]):
-            if idx < len(self.metadata):
-                metadata = self.metadata.iloc[idx].to_dict()
-                metadata['distance'] = float(distance)
-                results.append(metadata)
+        seen_texts = set()  # Para evitar duplicados
+        
+        for idx, sim in zip(indices[0], similarities):
+            if idx < 0 or idx >= len(self.metadata):  # Índice inválido
+                continue
+            
+            metadata = self.metadata.iloc[idx].to_dict()
+            text = metadata.get('text', '')
+            
+            # Evitar duplicados y textos muy cortos
+            if (text in seen_texts or 
+                len(text) < 50 or 
+                sim < self.similarity_threshold):
+                continue
                 
-        return results
+            seen_texts.add(text)
+            metadata['similarity'] = float(sim)
+            metadata['distance'] = float(distances[0][indices[0].tolist().index(idx)])
+            results.append(metadata)
+                
+        # Ordenar por similitud
+        results = sorted(results, key=lambda x: x['similarity'], reverse=True)
+        
+        # Logging de resultados
+        if results:
+            logger.info(f"Mejor similitud encontrada: {results[0]['similarity']:.3f}")
+            logger.info(f"Documento más relevante: {results[0].get('filename', 'N/A')}")
+            logger.info(f"Número de resultados únicos: {len(results)}")
+        else:
+            logger.warning("No se encontraron resultados que superen el umbral de similitud")
+        
+        return results[:k]  # Limitar a k resultados
 
 # Implementación para Pinecone (producción)
 class PineconeVectorStore(VectorStore):
@@ -429,13 +477,24 @@ class RAGSystem:
             raise RuntimeError(f"No se pudo inicializar ningún modelo (local ni API): {str(e)}")
         
         # Cargar modelo de embeddings
-        embedding_model_name = os.getenv('EMBEDDING_MODEL', 
-                                       'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
-        self.embedding_model = SentenceTransformer(embedding_model_name)
+        embedding_model_name = 'hiiamsid/sentence_similarity_spanish_es'  # Modelo fijo para coincidir con el índice
+        try:
+            logger.info(f"Intentando cargar modelo de embeddings: {embedding_model_name}")
+            self.embedding_model = SentenceTransformer(embedding_model_name)
+            logger.info(f"Modelo de embeddings cargado: {embedding_model_name}")
+            logger.info(f"Dimensión del modelo: {self.embedding_model.get_sentence_embedding_dimension()}")
+        except Exception as e:
+            logger.warning(f"Error al cargar modelo de embeddings principal: {str(e)}")
+            logger.info("Usando modelo de respaldo con la misma dimensionalidad")
+            self.embedding_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-mpnet-base-v2')
+            logger.info(f"Dimensión del modelo de respaldo: {self.embedding_model.get_sentence_embedding_dimension()}")
         
         # Inicializar el almacén vectorial
         self.vector_store = self._initialize_vector_store()
 
+        # Configurar umbral de similitud
+        self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', '0.1'))  # Umbral más permisivo
+        
     def _load_local_model(self, model_path: str):
         """Carga el modelo local con la configuración apropiada"""
         load_kwargs = {
@@ -498,549 +557,371 @@ class RAGSystem:
         metadata_path = str(self.embeddings_dir / 'metadata.csv')
         return FAISSVectorStore(index_path, metadata_path)
         
-    def retrieve_relevant_chunks(
-        self,
-        query: str,
-        k: int = None
-    ) -> List[Dict]:
+    def _expand_query(self, query: str) -> str:
         """
-        Recupera los chunks más relevantes para una consulta.
+        Expande la consulta para mejorar la búsqueda semántica.
+        """
+        query_lower = query.lower()
+        expanded_query = query
+        
+        # Palabras clave y sus expansiones
+        keywords = {
+            'sanción': ['sanción', 'sanciones', 'castigo', 'penalidad', 'disciplina', 'régimen disciplinario'],
+            'agredir': ['agredir', 'agresión', 'violencia', 'ataque', 'golpear'],
+            'profesor': ['profesor', 'docente', 'maestro', 'autoridad universitaria'],
+            'alumno': ['alumno', 'estudiante', 'cursante'],
+            'suspensión': ['suspensión', 'expulsión', 'separación'],
+            'físicamente': ['físicamente', 'físico', 'corporal', 'material']
+        }
+        
+        # Buscar palabras clave en la consulta
+        for key, expansions in keywords.items():
+            if any(word in query_lower for word in expansions):
+                expanded_query = f"{expanded_query} {' '.join(expansions)}"
+        
+        # Agregar referencias a artículos relevantes
+        if any(word in query_lower for word in keywords['sanción'] + keywords['agredir']):
+            expanded_query = f"{expanded_query} artículo 13 artículo 14 artículo 15 régimen disciplinario"
+        
+        logger.info(f"Consulta expandida: {expanded_query}")
+        return expanded_query
+        
+    def retrieve_relevant_chunks(self, query: str, k: int = None) -> List[Dict]:
+        """
+        Recupera chunks relevantes para una consulta.
         
         Args:
             query (str): Consulta del usuario
             k (int): Número de chunks a recuperar
             
         Returns:
-            List[Dict]: Lista de chunks relevantes con sus metadatos
+            List[Dict]: Lista de chunks relevantes con metadatos
         """
         if k is None:
-            k = int(os.getenv('RAG_NUM_CHUNKS', '3'))
+            k = int(os.getenv('RAG_NUM_CHUNKS', 5))
+            
+        # Preprocesar la consulta
+        query = query.strip()
+        if not query:
+            return []
             
         # Generar embedding de la consulta
-        query_embedding = self.embedding_model.encode([query])[0].tolist()
-        
-        # Buscar chunks similares en el almacén vectorial
-        search_results = self.vector_store.search(query_embedding, k * 10)  # Buscamos muchos más chunks para tener mayor probabilidad de encontrar relevantes
-        
-        # Imprimir los primeros resultados para debugging
-        logger.info(f"Resultados de búsqueda (primeros 3 de {len(search_results)}):")
-        for i, result in enumerate(search_results[:3]):
-            logger.info(f"Resultado {i+1}: distancia={result.get('distance', 'N/A')}, filename={result.get('filename', 'N/A')}")
-            if 'content' in result:
-                logger.info(f"   Primeros 100 caracteres: {result['content'][:100]}...")
-            elif 'text' in result:
-                logger.info(f"   Primeros 100 caracteres: {result['text'][:100]}...")
-        
-        # Filtrar resultados con una distancia demasiado grande (poco relevantes)
-        # Usar un umbral mucho más permisivo para capturar más contenido potencialmente relevante
-        # Ajustar para el modelo de embeddings utilizado - las distancias son ahora mayores
-        max_distance_threshold = float(os.getenv('MAX_DISTANCE_THRESHOLD', '20.0'))  # Aumentado desde 3.0 a 20.0
-        filtered_results = [r for r in search_results if r.get('distance', 1.0) < max_distance_threshold]
-        
-        logger.info(f"Encontrados {len(filtered_results)} chunks con distancia < {max_distance_threshold} (de {len(search_results)} búsquedas)")
-        
-        # Ordenar los resultados filtrados por distancia
-        filtered_results.sort(key=lambda x: x.get('distance', 1.0))
-        
-        # Tomar solo los k más relevantes después del filtrado
-        return filtered_results[:k]
+        try:
+            # Expandir la consulta para mejorar la búsqueda
+            expanded_query = self._expand_query(query)
+            logger.info(f"Consulta expandida: {expanded_query}")
+            
+            query_embedding = self.embedding_model.encode(
+                [expanded_query],
+                convert_to_numpy=True,
+                normalize_embeddings=True
+            )[0]
+            logger.info(f"Embedding generado con forma: {query_embedding.shape}")
+        except Exception as e:
+            logger.error(f"Error al generar embedding de consulta: {str(e)}", exc_info=True)
+            return []
+            
+        # Realizar búsqueda
+        try:
+            # Verificar que el vector_store está inicializado
+            if not hasattr(self, 'vector_store'):
+                logger.error("vector_store no está inicializado")
+                return []
+                
+            logger.info("Iniciando búsqueda en vector_store")
+            results = self.vector_store.search(query_embedding, k=k*2)
+            logger.info(f"Búsqueda completada, resultados obtenidos: {len(results)}")
+            
+            # Verificar si los resultados son relevantes
+            if not results:
+                logger.warning("No se encontraron chunks relevantes para la consulta.")
+                
+                # Verificar si la consulta es sobre trámites comunes
+                query_lower = query.lower()
+                tramites_keywords = {
+                    'constancia': 'a) Constancia de Alumno Regular',
+                    'alumno regular': 'a) Constancia de Alumno Regular',
+                    'baja': 'b) Baja de Materias',
+                    'dar de baja': 'b) Baja de Materias',
+                    'reincorporación': 'c) Reincorporación',
+                    'reincorporacion': 'c) Reincorporación',
+                    'recursada': 'd) Recursadas',
+                    'recursar': 'd) Recursadas'
+                }
+                
+                # Buscar coincidencias en las palabras clave
+                tramite_encontrado = None
+                for keyword, tramite in tramites_keywords.items():
+                    if keyword in query_lower:
+                        tramite_encontrado = tramite
+                    break
+            
+                if tramite_encontrado:
+                    # Usar la información base del trámite correspondiente
+                    if 'constancia' in query_lower or 'alumno regular' in query_lower:
+                        response = """Para tramitar la constancia de alumno regular:
+1. **Tramitar en el Sitio de Inscripciones**
+2. Ingresar con DNI y contraseña
+3. Seleccionar "Constancia de alumno regular"
+4. Imprimir y presentar en ventanilla del Ciclo Biomédico con Libreta/DNI"""
+                    elif 'baja' in query_lower:
+                        response = """Para dar de baja una materia:
+- **Plazo máximo**: 2 semanas antes del primer parcial o hasta el 25% de la cursada
+- **Pasos**:
+  1. Tramitar en Sitio de Inscripciones
+  2. Seleccionar "Baja de asignatura"
+  3. No requiere presentación en ventanilla si el estado es "Resuelto Positivamente" """
+                    elif 'reincorporación' in query_lower or 'reincorporacion' in query_lower:
+                        response = """Para solicitar la reincorporación:
+- **Primera reincorporación**: 
+  - Trámite automático en el sistema
+  - No requiere presentación en ventanilla
+- **Segunda reincorporación o más**:
+  1. Tramitar en Sitio de Inscripciones
+  2. Presentar documentación en ventanilla
+  3. La Comisión de Readmisión evaluará el caso"""
+                    else:  # recursada
+                        response = """Para solicitar una recursada:
+- **Si figura como BAJA en cursada anterior**:
+  - Sin arancel
+  - Inscripción normal como primera vez
+- **Si NO figura como BAJA**:
+  1. Generar trámite
+  2. Pagar arancel en Tesorería
+  3. Presentar comprobante en buzones del Ciclo Biomédico"""
+                    
+                    return {
+                        "query": query,
+                        "response": response,
+                        "relevant_chunks": [],
+                        "sources": ["Información de Trámites Comunes"]
+                    }
+                else:
+                    # Si no es un trámite común, usar respuesta estándar con derivación por email
+                    has_greeting = any(word in query.lower() for word in greeting_words)
+                    if has_greeting:
+                        standard_no_info_response = f"👨‍⚕️ ¡Hola! Soy DrCecim. Lo siento, no tengo información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas. Si tienes otras preguntas sobre temas relacionados con la Facultad de Medicina, no dudes en consultarme."
+                    else:
+                        standard_no_info_response = f"👨‍⚕️ Lo siento, no tengo información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas. Si tienes otras preguntas sobre temas relacionados con la Facultad de Medicina, no dudes en consultarme."
+                    
+                return {
+                    "query": query,
+                        "response": standard_no_info_response,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # Filtrar por similitud y duplicados
+            filtered_results = []
+            seen_content = set()
+            
+            for result in results:
+                text = result.get('text', '').strip()
+                # Crear una versión simplificada del texto para comparación
+                simple_text = ' '.join(text.lower().split())
+                
+                # Verificar similitud usando el campo correcto
+                similarity = result.get('similarity', 0.0)
+                filename = result.get('filename', '')
+                
+                logger.info(f"Procesando resultado - Similitud: {similarity}, Archivo: {filename}")
+                
+                # Dar prioridad a chunks del régimen disciplinario si la consulta es sobre sanciones
+                if any(word in query.lower() for word in ['sanción', 'sanciones', 'agredir', 'agresión']):
+                    if "Regimen_Disciplinario.pdf" in filename:
+                        # Reducir el umbral para documentos relevantes
+                        if similarity >= (self.similarity_threshold * 0.5):  # Umbral más permisivo para documentos relevantes
+                            if simple_text not in seen_content:
+                                seen_content.add(simple_text)
+                                filtered_results.append(result)
+                                logger.info(f"Chunk de Régimen Disciplinario aceptado con similitud: {similarity:.3f}")
+            else:
+                        # Mantener umbral normal para otros documentos
+                        if similarity >= self.similarity_threshold and simple_text not in seen_content:
+                            seen_content.add(simple_text)
+                            filtered_results.append(result)
+                            logger.info(f"Chunk de otro documento aceptado con similitud: {similarity:.3f}")
+                        else:
+                            # Para otras consultas, usar el umbral normal
+                            if similarity >= self.similarity_threshold and simple_text not in seen_content:
+                                seen_content.add(simple_text)
+                                filtered_results.append(result)
+                                logger.info(f"Chunk aceptado con similitud: {similarity:.3f}")
+            
+            # Ordenar por similitud y limitar a k resultados
+            filtered_results = sorted(filtered_results, key=lambda x: x.get('similarity', 0.0), reverse=True)[:k]
+            
+            # Logging de resultados
+            logger.info(f"Recuperados {len(filtered_results)} chunks únicos de {len(results)} totales")
+            
+            return filtered_results
+            
+        except Exception as e:
+            logger.error(f"Error en la búsqueda de chunks: {str(e)}", exc_info=True)
+            return []
         
     def generate_response(self, query: str, context: str, sources: List[str] = None) -> str:
         """
-        Genera una respuesta utilizando el modelo LLM aplicando técnicas de prompt engineering de Mistral AI.
+        Genera una respuesta basada en el contexto y la consulta.
         
         Args:
             query (str): Consulta del usuario
-            context (str): Contexto relevante para responder
-            sources (List[str], optional): Fuentes del contexto
+            context (str): Contexto relevante recuperado
+            sources (List[str]): Lista de fuentes de información
             
         Returns:
             str: Respuesta generada
         """
-        try:
-            # Lista de emojis para enriquecer las respuestas
-            information_emojis = ["📚", "📖", "ℹ️", "📊", "🔍", "📝", "📋", "📈", "📌", "🧠"]
-            greeting_emojis = ["👋", "😊", "🤓", "👨‍⚕️", "👩‍⚕️", "🎓", "🌟"]
-            
-            # Seleccionar emojis de manera pseudo-aleatoria pero consistente
-            import hashlib
-            query_hash = int(hashlib.md5(query.encode()).hexdigest(), 16)
-            info_emoji = information_emojis[query_hash % len(information_emojis)]
-            greeting_emoji = greeting_emojis[query_hash % len(greeting_emojis)]
-            
-            # Verificar si es una consulta sobre el nombre del bot
-            name_queries = [
-                "cómo te llamás", "como te llamas", "¿cómo te llamas?", "¿como te llamas?", "cómo te llamas?", "como te llamas?",
-                "cuál es tu nombre", "cual es tu nombre", "¿cuál es tu nombre?", "¿cual es tu nombre?", "cuál es tu nombre?", "cual es tu nombre?",
-                "quién eres", "quien eres", "¿quién eres?", "¿quien eres?", "quién eres?", "quien eres?",
-                "cómo te dicen", "como te dicen", "¿cómo te dicen?", "¿como te dicen?", "cómo te dicen?", "como te dicen?",
-                "tu nombre", "cómo te llaman", "como te llaman",
-                "cuál es tu apellido", "cual es tu apellido"
-            ]
-            
-            # Verificación más estricta para consultas sobre el nombre
-            is_name_query = False
-            clean_query = query.lower().strip()
-            if clean_query in name_queries:
-                is_name_query = True
-            else:
-                # Si no hay coincidencia exacta, intentar coincidencia parcial
-                is_name_query = any(phrase in clean_query for phrase in name_queries)
-            
-            # Verificación adicional para "Cómo te llamas?" exactamente como en WhatsApp
-            if "cómo te llamas" in clean_query or "como te llamas" in clean_query:
-                is_name_query = True
-                
-            print(f"DEBUG - Query: '{query}', is_name_query: {is_name_query}")  # Depuración
-            
-            # Lista de palabras de saludo
-            greeting_words = ['hola', 'buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias', 
-                              'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
-            
-            # Identificar si hay un saludo en la consulta
-            has_greeting = False
-            greeting_used = None
-            for word in greeting_words:
-                if word in query.lower().strip().split() or query.lower().strip().startswith(word):
-                    has_greeting = True
-                    greeting_used = word
-                    break
-            
-            # Caso especial para "buenas" que puede estar al inicio sin espacio
-            if not has_greeting and (query.lower().strip().startswith('buenas')):
-                has_greeting = True
-                greeting_used = 'buenas'
-            
-            # Determinar si es solo un saludo sin pregunta
-            is_greeting_only = query.lower().strip() in greeting_words or any(
-                query.lower().strip() == word or query.lower().strip().startswith(word + " ")
-                for word in greeting_words
-            )
-            
-            # Determinar el saludo a usar en la respuesta si hay uno en la consulta
-            greeting_prefix = ""
-            if has_greeting:
-                if greeting_used in ['hola', 'saludos']:
-                    greeting_prefix = f"👨‍⚕️ ¡Hola! Soy DrCecim. "
-                elif greeting_used in ['buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias']:
-                    greeting_prefix = f"👨‍⚕️ ¡Buenos días! Soy DrCecim. "
-                elif greeting_used == 'buenas tardes':
-                    greeting_prefix = f"👨‍⚕️ ¡Buenas tardes! Soy DrCecim. "
-                elif greeting_used == 'buenas noches':
-                    greeting_prefix = f"👨‍⚕️ ¡Buenas noches! Soy DrCecim. "
-                elif greeting_used in ['qué tal', 'que tal', 'cómo va', 'como va']:
-                    greeting_prefix = f"👨‍⚕️ ¿Cómo va? Soy DrCecim. "
-                else:
-                    greeting_prefix = f"👨‍⚕️ ¡Buenas! Soy DrCecim. "
-            else:
-                greeting_prefix = f"👨‍⚕️ "
-            
-            # Si es solo un saludo, responder directamente sin buscar embeddings
-            if is_greeting_only:
-                greeting_responses = [
-                    f"👨‍⚕️ ¡Hola! Soy DrCecim, tu asistente de la Facultad de Medicina. ¿En qué puedo ayudarte hoy?",
-                    f"👨‍⚕️ ¡Buenas! Soy DrCecim, ¿en qué puedo asistirte hoy?",
-                    f"👨‍⚕️ ¿Cómo va? Soy DrCecim, tu asistente académico. ¿Con qué puedo ayudarte?",
-                    f"👨‍⚕️ Hola, soy DrCecim. ¿En qué puedo orientarte hoy?",
-                    f"👨‍⚕️ Saludos. Soy DrCecim, ¿necesitas ayuda con algún tema en particular?",
-                    f"👨‍⚕️ ¡Buen día! Soy DrCecim, asistente de la Facultad de Medicina. ¿En qué puedo colaborar?"
-                ]
-                import random
-                return {
-                    "query": query,
-                    "response": random.choice(greeting_responses),
-                    "relevant_chunks": [],
-                    "sources": []
-                }
-            
-            if not context or context.strip() == "":
-                # Respuesta para cuando no hay contexto relevante
-                system_prompt = f"""Eres un asistente virtual especializado de la Facultad de Medicina de la Universidad de Buenos Aires. 
-                Tu tono es amable, profesional e incluyes emojis apropiados en tus respuestas.
-                Hablas directamente con los alumnos de medicina, no con profesores.
-                
-                ### Estilo de respuesta:
-                - Usa un tono formal pero amigable
-                - Incluye al menos un emoji relevante en cada respuesta
-                - Preséntate como "DrCecim" SOLO si la consulta incluye un saludo
-                - Sé conciso y directo
-                
-                ### Ejemplos de respuestas:
-                Pregunta con saludo: Hola, ¿cuándo comienzan las inscripciones?
-                Respuesta: {greeting_emoji} Soy DrCecim. Las inscripciones comienzan el 15 de marzo. ¡No olvides tener toda tu documentación lista! {info_emoji}
-                
-                Pregunta sin saludo: ¿Qué carreras ofrece la facultad?
-                Respuesta: {greeting_emoji} La facultad ofrece las siguientes carreras: Medicina, Enfermería, Kinesiología, Nutrición y Obstetricia. {info_emoji} ¿Necesitas información específica sobre alguna?
-                """
-                
-                user_prompt = f"No tengo información específica sobre: '{query}'. Responde amablemente que no tienes información suficiente sobre este tema y sugiere preguntar sobre otros temas relacionados con la universidad."
-                
-                # Formato del prompt según si es API o modelo local
-                prompt = f"{system_prompt}\n\n{user_prompt}"
-                
-                response = self.model.generate(prompt, max_length=512, temperature=0.7)
-                
-                # Asegurar que la respuesta incluya emojis y la presentación correcta
-                if has_greeting and "DrCecim" not in response:
-                    response = f"{greeting_emoji} Soy DrCecim. {response}"
-                elif not has_greeting and "DrCecim" in response:
-                    # Si no hay saludo, eliminar la mención a DrCecim
-                    response = re.sub(r'(?i)(Soy DrCecim\.?|DrCecim aquí\.?|DrCecim:)\s*', f'👨‍⚕️ ', response)
-                
-                if not any(emoji in response for emoji in information_emojis + greeting_emojis):
-                    response = f"{response} {info_emoji}"
-                
-                return response
-            
-            # Si hay contexto relevante, usar el contexto y las fuentes
-            if sources:
-                fuentes_str = ", ".join(sources)
-                sources_context = f"Fuentes consultadas: {fuentes_str}"
-            else:
-                sources_context = ""
-            
-            # Instrucción específica para el saludo
-            greeting_instruction = ""
-            if has_greeting:
-                greeting_instruction = f"Inicia tu respuesta con '{greeting_prefix}'"
-            else:
-                greeting_instruction = f"Inicia tu respuesta con '{greeting_prefix}' sin mencionar el nombre DrCecim"
-            
-            # Aplicar técnicas de prompt engineering de Mistral AI
-            system_prompt = f"""Eres un asistente virtual especializado, llamado DrCecim, de la Facultad de Medicina de la Universidad de Buenos Aires.
+        # Prompt base para el asistente administrativo
+        system_prompt = """Eres un asistente administrativo especializado de la Universidad de Buenos Aires (UBA).
+Tu rol es proporcionar información precisa sobre trámites y procedimientos administrativos.
 
-### ADVERTENCIA EXTREMADAMENTE IMPORTANTE:
-NUNCA GENERES PREGUNTAS Y RESPUESTAS. RESPONDE SOLO Y EXCLUSIVAMENTE A LA CONSULTA DEL USUARIO. SOLO GENERA UNA ÚNICA RESPUESTA. NO CREES DIÁLOGOS, NI CONVERSACIONES, NI INTERACCIONES ADICIONALES.
+INSTRUCCIONES IMPORTANTES:
+1. Responde SOLO con información verificada que encuentres en el contexto proporcionado
+2. Si no tienes información suficiente en el contexto, sigue estas pautas:
 
-### INSTRUCCIÓN SOBRE SALUDOS - MUY IMPORTANTE:
-La consulta del usuario {'' if has_greeting else 'NO'} contiene un saludo.
-{'DEBES iniciar tu respuesta incluyendo "Soy DrCecim" en tu saludo.' if has_greeting else 'NO debes mencionar tu nombre "DrCecim" en tu respuesta.'}
+A) Para trámites comunes conocidos, proporciona esta información base:
 
-### Instrucciones de Formato:
-1. Usa un tono amable y profesional.
-2. SIEMPRE empieza tus mensajes con el emoji 👨‍⚕️.
-3. Preséntate como "DrCecim" SOLO si el usuario te saluda primero.
-4. Cuando necesites crear listas:
-   - Usa el formato exacto de WhatsApp: guion + espacio + texto + espacio + emoji
-   - Un elemento por línea, sin texto después del emoji
-   - Ejemplo correcto: "- Elemento uno 📝"
-   - NUNCA incluyas texto después del emoji
-   - NUNCA escribas algo como: "- Elemento 📝 información adicional"
+PREGUNTAS FRECUENTES Y RESPUESTAS ESTÁNDAR:
 
-### Formato específico para WhatsApp:
-- Usa guiones (-) para listas, NUNCA asteriscos o bullets (•)
-- Coloca el emoji AL FINAL de cada línea de lista, NUNCA al principio
-- Después de cada emoji en la lista, usa un SALTO DE LÍNEA completo
-- Mantén los elementos de la lista CORTOS y SIMPLES
+1. CONSTANCIAS Y CERTIFICADOS:
+   - "¿Dónde puedo tramitar la constancia de alumno regular?"
+   Respuesta base:
+   - **Paso 1:** Ingresar DNI y contraseña en Sitio de Inscripciones
+   - **Paso 2:** Seleccionar "Constancia de alumno regular"
+   - **Paso 3:** Imprimir formulario (1 hoja con 3 certificados)
+   - **Paso 4:** Presentar en ventanilla del Ciclo Biomédico con Libreta Universitaria o DNI
 
-### Ejemplos CORRECTOS de listas para WhatsApp:
-👨‍⚕️ Las sanciones que se pueden aplicar son:
-- Apercibimiento o suspensión de hasta un año ⚠️
-- Suspensión de uno a cinco años ⚠️
-- Expulsión definitiva ⚠️
+2. BAJAS Y MODIFICACIONES:
+   a) "¿Cuánto tiempo tengo para dar de baja una materia?"
+   Respuesta base:
+   - Plazo máximo: **2 semanas antes del primer parcial**
+   - O **hasta el 25% de la cursada** en materias sin parcial
+   - **Paso 1:** Ingresar al Sitio de Inscripciones
+   - **Paso 2:** Seleccionar "Baja de asignatura"
+   - **Paso 3:** Si aparece "Resuelto Positivamente", no requiere más trámites
 
-### {'Ejemplos de respuestas CON saludo:' if has_greeting else 'Ejemplos de respuestas SIN saludo:'}
-{'👨‍⚕️ ¡Buenas! Soy DrCecim. Las sanciones que se pueden aplicar son...' if has_greeting else '👨‍⚕️ Las sanciones que se pueden aplicar son...'}
-{'👨‍⚕️ ¿Cómo va? Soy DrCecim. La información que solicitaste es...' if has_greeting else '👨‍⚕️ La información que solicitaste es...'}
+   b) "¿Cómo anulo una inscripción a final?"
+   Respuesta base:
+   - Acudir a ventanilla del Ciclo Biomédico
+   - Presentar número de constancia del trámite de inscripción
+   
+   c) "¿Qué hago si no logro inscribirme o no salgo asignado?"
+   Respuesta base:
+   - Dirigirse a la cátedra o departamento correspondiente
+   - Solicitar inclusión en lista
+   - Presentar Libreta Universitaria o DNI
 
-### REGLAS CRÍTICAS - LEE ESTO CUIDADOSAMENTE:
-1. SOLO RESPONDE UNA VEZ A LA PREGUNTA ESPECÍFICA DEL USUARIO. NO GENERES NINGUNA PREGUNTA NI RESPUESTA ADICIONAL.
-2. NO CREES DIÁLOGOS FICTICIOS BAJO NINGUNA CIRCUNSTANCIA.
-3. NO INVENTES PREGUNTAS. SI VES QUE ESTÁS CREANDO UNA PREGUNTA, DETENTE INMEDIATAMENTE.
-4. NO RESPONDAS A PREGUNTAS QUE EL USUARIO NO TE HA HECHO EXPLÍCITAMENTE.
-5. SOLO PROPORCIONA INFORMACIÓN DIRECTAMENTE RELACIONADA CON LA CONSULTA DEL USUARIO.
-6. NO INCLUYAS NINGUNA PREGUNTA EN TU RESPUESTA.
-7. CADA MENSAJE TUYO DEBE CONTENER UNA ÚNICA RESPUESTA CONCISA.
-8. NUNCA CREES TEXTO QUE EMPIECE CON SIGNOS DE INTERROGACIÓN (¿).
+3. REINCORPORACIONES:
+   - "¿Cómo solicito la reincorporación a la Carrera?"
+   Respuesta base:
+   - **Primera reincorporación:**
+     * Trámite automático en sistema
+     * No requiere presentación en ventanilla
+   - **Segunda reincorporación o más:**
+     * Realizar trámite en Sitio de Inscripciones
+     * Imprimir documentación (2 hojas: certificado y constancia)
+     * Presentar en ventanilla del Ciclo Biomédico
+     * Evaluación por Comisión de Readmisión
 
-<contexto>
+4. RECURSADAS Y NUEVAS CURSADAS:
+   a) "¿Cómo solicito una recursada?"
+   Respuesta base:
+   - **Si figura como BAJA:**
+     * Generar trámite
+     * Inscripción normal sin arancel
+   - **Si NO figura como BAJA:**
+     * Generar trámite
+     * Imprimir talón de pago
+     * Pagar en Tesorería
+     * Presentar comprobante en buzones
+
+   b) "¿Cómo solicito una tercera cursada?"
+   Respuesta base:
+   - **Paso 1:** Ingresar al Sitio de Inscripciones
+   - **Paso 2:** Seleccionar "3º Cursada"
+   - **Paso 3:** Imprimir constancia y certificado
+   - **Si figura BAJA en cursadas anteriores:**
+     * Inscripción normal sin arancel
+   - **Si NO figura BAJA:**
+     * Pagar arancel en Tesorería
+     * Presentar comprobante en buzón
+
+   c) "¿Cómo solicito una cuarta cursada?"
+   Respuesta base:
+   - **Paso 1:** Ingresar al Sitio de Inscripciones
+   - **Paso 2:** Seleccionar "4º Cursada o más"
+   - **Paso 3:** Imprimir documentación
+   - **Paso 4:** Presentar en ventanilla con Libreta
+   - **Paso 5:** Acudir a Dirección de Alumnos
+
+5. PRÓRROGAS Y EXTENSIONES:
+   - "¿Cómo hago el trámite de prórroga de materias?"
+   Respuesta base:
+   - **Primera o segunda prórroga:**
+     * Tramitar en Sitio de Inscripciones
+     * Seleccionar "Prórroga de asignatura"
+     * Trámite automático resuelto positivamente
+   - **Tercera prórroga o superior:**
+     * Realizar trámite
+     * Imprimir constancia
+     * Presentar en ventanilla con Libreta Universitaria
+
+B) Para consultas sin información disponible:
+   - Indica claramente que no tienes la información específica
+   - Sugiere contactar a alumnos@fmed.uba.ar para obtener información precisa
+   - Mantén un tono amable y profesional al derivar la consulta
+
+3. Mantén un tono profesional pero amigable
+4. Estructura las respuestas en pasos claros cuando sea apropiado
+5. Incluye detalles específicos sobre documentación requerida
+6. Menciona dónde debe realizarse cada trámite
+
+FORMATO DE RESPUESTA:
+- Usa viñetas o números para listar pasos
+- Destaca información importante en **negrita**
+- Separa secciones con líneas si es necesario
+- Incluye advertencias o notas importantes cuando sea relevante
+
+Contexto proporcionado:
 {context}
-</contexto>
 
-<consulta>
-{query}
-</consulta>
+Consulta del usuario: {query}
 
-Responde ÚNICAMENTE a la consulta con información del contexto. SOLO GENERA UNA RESPUESTA. NO HAGAS PREGUNTAS."""
+Respuesta:"""
+
+        # Preparar el prompt completo
+        prompt = system_prompt.format(
+            context=context,
+            query=query
+        )
+
+        try:
+            # Generar respuesta
+            response = self.model.generate(prompt)
             
-            user_prompt = f"Responde de manera directa y concisa a la consulta. Si necesitas hacer una lista, usa EXACTAMENTE el formato indicado en las instrucciones."
+            # Si no hay información suficiente en el contexto
+            if "no tengo información suficiente" in response.lower():
+                return "Lo siento, no tengo información específica sobre ese trámite en este momento. Te sugiero consultar directamente en la ventanilla del Ciclo Biomédico o en la Dirección de Alumnos para obtener la información más actualizada."
             
-            # Formato completo del prompt
-            prompt = f"{system_prompt}\n\n{user_prompt}"
+            # Agregar fuentes si están disponibles
+            if sources:
+                response += "\n\nFuente(s): " + ", ".join(sources)
             
-            response = self.model.generate(prompt, max_length=512, temperature=0.7)
-            
-            # Post-procesar respuesta para asegurar el formato correcto
-            response = re.sub(r'(Según el contexto|Basado en el contexto|De acuerdo con el contexto|Como se menciona en el contexto|Respuesta:|Según la información proporcionada)', '', response, flags=re.IGNORECASE)
-            response = re.sub(r'<[^>]*>', '', response)  # Eliminar etiquetas HTML
-            response = response.strip()
-            
-            # Eliminar preguntas autogeneradas y sus respuestas
-            # Esto dividirá la respuesta en la primera oración que termine con punto 
-            # o en el primer párrafo, lo que sea más corto
-            # Buscar la primera pregunta (si existe) y cortar todo lo que sigue
-            question_pattern = r'(?:\n|^)(?:\?|¿).*\?'
-            match = re.search(question_pattern, response)
-            if match:
-                response = response[:match.start()]
-                
-            # Si después de eliminar preguntas, queda una respuesta con párrafos múltiples
-            # mantener solo el primer párrafo relevante
-            paragraphs = re.split(r'\n\s*\n', response)
-            if len(paragraphs) > 1:
-                # Mantener el primer párrafo (respuesta principal) y cualquier lista que pueda seguir
-                main_content = paragraphs[0]
-                if '- ' in main_content or main_content.strip().endswith(':'):
-                    # Si el primer párrafo contiene una lista o termina con dos puntos,
-                    # incluir también el siguiente párrafo que probablemente contiene la lista
-                    for p in paragraphs[1:]:
-                        if p.strip().startswith('- '):
-                            main_content += '\n\n' + p
-                response = main_content
-            
-            # Asegurar que las listas usen guiones y no bullets
-            response = response.replace('• ', '- ')
-            
-            # Detectar si hay listas en la respuesta
-            has_bullet_list = '- ' in response
-            
-            # Procesar formatos de lista con viñetas para mejorar presentación
-            if has_bullet_list:
-                # Asegurarse de que cada elemento de lista esté en una línea separada
-                response = re.sub(r'([^\n])(\s*-\s+)', r'\1\n- ', response)
-                
-                # Separar cualquier texto que venga después de un emoji en una línea de lista
-                lines = response.split('\n')
-                processed_lines = []
-                
-                for line in lines:
-                    if line.strip().startswith('- '):
-                        # Buscar emojis en la línea
-                        emoji_pattern = r'(📚|📖|ℹ️|📊|🔍|📝|📋|📈|📌|🧠|👋|😊|🤓|👨‍⚕️|👩‍⚕️|🎓|🌟|📄|📅|🗓️|⚠️)'
-                        emoji_match = re.search(emoji_pattern, line)
-                        
-                        if emoji_match:
-                            emoji_pos = emoji_match.end()
-                            # Si hay texto después del emoji, separarlo
-                            if emoji_pos < len(line) and line[emoji_pos:].strip():
-                                processed_lines.append(line[:emoji_pos])  # Línea con el ítem y el emoji
-                                processed_lines.append("")  # Línea en blanco para separar
-                                processed_lines.append(line[emoji_pos:].strip())  # Texto adicional como párrafo
-                            else:
-                                processed_lines.append(line)
-                        else:
-                            processed_lines.append(line)
-                    else:
-                        processed_lines.append(line)
-                
-                response = '\n'.join(processed_lines)
-            
-            # Asegurar que comienza con el emoji de doctor
-            if not response.startswith("👨‍⚕️"):
-                response = "👨‍⚕️ " + response.lstrip()
-            
-            # Asegurar que la respuesta tenga el formato adecuado con el saludo correcto
-            if has_greeting and "DrCecim" not in response and not response.startswith(greeting_prefix):
-                if response.startswith("👨‍⚕️"):
-                    # Si ya empieza con el emoji, reemplazar con el greeting_prefix completo
-                    response = greeting_prefix + response[5:].lstrip()
-                else:
-                    response = greeting_prefix + response
-            elif not has_greeting and "DrCecim" in response:
-                # Si no hay saludo, eliminar menciones a DrCecim
-                response = re.sub(r'(?i)(Soy DrCecim\.?|DrCecim aquí\.?|DrCecim:)\s*', f'👨‍⚕️ ', response)
-                
-                # También eliminar saludos si no hubo saludo en la consulta
-                response = re.sub(r'(?i)(¡Hola!|Hola,|¡Buenos días!|Buenos días|¡Buenas tardes!|Buenas tardes|¡Buenas noches!|Buenas noches|Saludos|¡Buenas!|Buenas,)\s*', '', response)
-            
-            # Eliminar líneas vacías duplicadas
-            response = re.sub(r'\n\s*\n+', '\n\n', response)
-            
-            return response.strip()
+            return response
             
         except Exception as e:
             logger.error(f"Error al generar respuesta: {str(e)}")
-            if has_greeting:
-                return f"👨‍⚕️ Soy DrCecim. Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
-            else:
-                return f"👨‍⚕️ Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
+            return "Lo siento, hubo un error al procesar tu consulta. Por favor, intenta nuevamente o consulta directamente en la Dirección de Alumnos."
         
-    def process_query(self, query: str, num_chunks: int = None) -> Dict:
+    def process_query(self, query: str) -> Dict[str, Any]:
         """
         Procesa una consulta utilizando RAG para generar una respuesta.
-        
-        Args:
-            query (str): Consulta del usuario
-            num_chunks (int, optional): Número de fragmentos a recuperar
-            
-        Returns:
-            Dict: Diccionario con la respuesta y detalles
         """
         try:
-            # Lista de emojis para enriquecer las respuestas
-            information_emojis = ["📚", "📖", "ℹ️", "📊", "🔍", "📝", "📋", "📈", "📌", "🧠"]
-            greeting_emojis = ["👋", "😊", "🤓", "👨‍⚕️", "👩‍⚕️", "🎓", "🌟"]
-            
-            # Seleccionar emojis de manera pseudo-aleatoria pero consistente
-            import hashlib
-            query_hash = int(hashlib.md5(query.encode()).hexdigest(), 16)
-            info_emoji = information_emojis[query_hash % len(information_emojis)]
-            greeting_emoji = greeting_emojis[query_hash % len(greeting_emojis)]
-            
-            # Lista de palabras de saludo
-            greeting_words = ['hola', 'buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias', 
-                              'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
-            
-            # Verificar si es una consulta sobre el nombre del bot
-            name_queries = [
-                "cómo te llamás", "como te llamas", "¿cómo te llamas?", "¿como te llamas?", "cómo te llamas?", "como te llamas?",
-                "cuál es tu nombre", "cual es tu nombre", "¿cuál es tu nombre?", "¿cual es tu nombre?", "cuál es tu nombre?", "cual es tu nombre?",
-                "quién eres", "quien eres", "¿quién eres?", "¿quien eres?", "quién eres?", "quien eres?",
-                "cómo te dicen", "como te dicen", "¿cómo te dicen?", "¿como te dicen?", "cómo te dicen?", "como te dicen?",
-                "tu nombre", "cómo te llaman", "como te llaman",
-                "cuál es tu apellido", "cual es tu apellido"
-            ]
-            
-            # Verificación más estricta para consultas sobre el nombre
-            is_name_query = False
-            clean_query = query.lower().strip()
-            if clean_query in name_queries:
-                is_name_query = True
-            else:
-                # Si no hay coincidencia exacta, intentar coincidencia parcial
-                is_name_query = any(phrase in clean_query for phrase in name_queries)
-            
-            # Verificación adicional para "Cómo te llamas?" exactamente como en WhatsApp
-            if "cómo te llamas" in clean_query or "como te llamas" in clean_query:
-                is_name_query = True
-                
-            print(f"DEBUG - Query: '{query}', is_name_query: {is_name_query}")  # Depuración
-            
-            # Si pregunta por el nombre, responder directamente
-            if is_name_query:
-                name_response = f"👨‍⚕️ Me llamo DrCecim. Soy un asistente virtual especializado en información académica de la Facultad de Medicina de la Universidad de Buenos Aires."
-                
-                return {
-                    "query": query,
-                    "response": name_response,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
-            
-            # 2. SEGUNDO: Verificar si es una consulta sobre las capacidades del bot
-            meta_queries = [
-                "qué hace", "que hace", "qué podés hacer", "que podes hacer",
-                "en qué me podés ayudar", "en que me podes ayudar",
-                "cómo me podés ayudar", "como me podes ayudar",
-                "qué información tenés", "que informacion tenes",
-                "qué información conocés", "que informacion conoces",
-                "qué sabés", "que sabes", "para qué servís", "para que servis",
-                "qué tipo de consulta", "que tipo de consulta",
-                "qué tipo de información", "que tipo de informacion",
-                "qué tipo de preguntas", "que tipo de preguntas",
-                "qué consultas puedo hacer", "que consultas puedo hacer",
-                "qué me podés decir", "que me podes decir",
-                "qué puedo consultarte", "que puedo consultarte",
-                "qué servicios ofrece", "que servicios ofrece",
-                "cuáles son tus funciones", "cuales son tus funciones",
-                "sobre qué temas", "sobre que temas", "qué temas", "que temas",
-                "temas de consulta", "qué materias", "que materias",
-                "de qué me podés informar", "de que me podes informar", "qué me puedes informar",
-                "sobre qué podés ayudarme", "sobre que podes ayudarme",
-                "qué me puedes informar", "que puedes decirme", "qué puedes decirme", 
-                "que puedo preguntarte", "qué puedo preguntarte"
-            ]
-            
-            # Mejor detección de meta-queries
-            is_meta_query = False
-            clean_query = query.lower().strip()
-            
-            # Comprobar coincidencia exacta primero
-            if clean_query in meta_queries:
-                is_meta_query = True
-            else:
-                # Si no hay coincidencia exacta, buscar coincidencias parciales
-                for phrase in meta_queries:
-                    if phrase in clean_query:
-                        is_meta_query = True
-                        break
-                        
-                # Verificación adicional para consultas como "¿Qué me puedes informar?"
-                if re.search(r'(?:qué|que).*(?:pued(?:o|es)|pod(?:és|es)).*(?:informar|ayudar|consultar|preguntar)', clean_query):
-                    is_meta_query = True
-            
-            if is_meta_query:
-                meta_response = f"👨‍⚕️ Puedo ayudarte con consultas sobre:\n- Reglamento académico de la Facultad de Medicina 📚\n- Condiciones de regularidad para alumnos 📋\n- Régimen disciplinario y sanciones 🎓\n- Trámites administrativos para estudiantes 📄\n- Requisitos académicos y normativas 📌"
-                
-                return {
-                    "query": query,
-                    "response": meta_response,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
-            
-            # 3. TERCERO: Identificar si hay un saludo en la consulta
-            has_greeting = False
-            greeting_used = None
-            for word in greeting_words:
-                if word in query.lower().split() or query.lower().strip().startswith(word):
-                    has_greeting = True
-                    greeting_used = word
-                    break
-            
-            # Caso especial para "buenas" que puede estar al inicio sin espacio
-            if not has_greeting and (query.lower().strip().startswith('buenas')):
-                has_greeting = True
-                greeting_used = 'buenas'
-            
-            # Determinar si es solo un saludo sin pregunta
-            is_greeting_only = query.lower().strip() in greeting_words or any(
-                query.lower().strip() == word or query.lower().strip().startswith(word + " ")
-                for word in greeting_words
-            )
-            
-            # Determinar el saludo a usar en la respuesta si hay uno en la consulta
-            greeting_prefix = ""
-            if has_greeting:
-                if greeting_used in ['hola', 'saludos']:
-                    greeting_prefix = f"👨‍⚕️ ¡Hola! Soy DrCecim. "
-                elif greeting_used in ['buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias']:
-                    greeting_prefix = f"👨‍⚕️ ¡Buenos días! Soy DrCecim. "
-                elif greeting_used == 'buenas tardes':
-                    greeting_prefix = f"👨‍⚕️ ¡Buenas tardes! Soy DrCecim. "
-                elif greeting_used == 'buenas noches':
-                    greeting_prefix = f"👨‍⚕️ ¡Buenas noches! Soy DrCecim. "
-                elif greeting_used in ['qué tal', 'que tal', 'cómo va', 'como va']:
-                    greeting_prefix = f"👨‍⚕️ ¿Cómo va? Soy DrCecim. "
-                else:
-                    greeting_prefix = f"👨‍⚕️ ¡Buenas! Soy DrCecim. "
-            else:
-                greeting_prefix = f"👨‍⚕️ "
-            
-            # Si es solo un saludo, responder directamente sin buscar embeddings
-            if is_greeting_only:
-                greeting_responses = [
-                    f"👨‍⚕️ ¡Hola! Soy DrCecim, tu asistente de la Facultad de Medicina. ¿En qué puedo ayudarte hoy?",
-                    f"👨‍⚕️ ¡Buenas! Soy DrCecim, ¿en qué puedo asistirte hoy?",
-                    f"👨‍⚕️ ¿Cómo va? Soy DrCecim, tu asistente académico. ¿Con qué puedo ayudarte?",
-                    f"👨‍⚕️ Hola, soy DrCecim. ¿En qué puedo orientarte hoy?",
-                    f"👨‍⚕️ Saludos. Soy DrCecim, ¿necesitas ayuda con algún tema en particular?",
-                    f"👨‍⚕️ ¡Buen día! Soy DrCecim, asistente de la Facultad de Medicina. ¿En qué puedo colaborar?"
-                ]
-                import random
-                return {
-                    "query": query,
-                    "response": random.choice(greeting_responses),
-                    "relevant_chunks": [],
-                    "sources": []
-                }
-            
-            # 5. QUINTO: Para preguntas normales, seguir el flujo habitual de RAG
-            if num_chunks is None:
-                num_chunks = int(os.getenv('RAG_NUM_CHUNKS', 3))
-            
-            # Logging de la consulta para debugging
-            logger.info(f"Procesando consulta: '{query}'")
+            # Establecer el número de chunks por defecto
+            num_chunks = int(os.getenv('RAG_NUM_CHUNKS', 3))
+            logger.info(f"Procesando consulta: {query}")
             
             # Encontrar fragmentos relevantes
             relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
@@ -1048,11 +929,18 @@ Responde ÚNICAMENTE a la consulta con información del contexto. SOLO GENERA UN
             # Verificar si se encontraron chunks relevantes
             if not relevant_chunks:
                 logger.warning("No se encontraron chunks relevantes para la consulta.")
-                # Respuesta estándar cuando no hay información disponible
-                if has_greeting:
-                    standard_no_info_response = f"👨‍⚕️ ¡Hola! Soy DrCecim. No tengo información suficiente sobre esto en mis documentos. Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar. ¡Estoy aquí para ayudarte!"
-                else:
-                    standard_no_info_response = f"👨‍⚕️ No tengo información suficiente sobre esto en mis documentos. Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar. ¡Estoy aquí para ayudarte!"
+                
+                # Verificar si la consulta es sobre sanciones o agresiones
+                query_lower = query.lower()
+                if any(word in query_lower for word in ['sanción', 'sanciones', 'agredir', 'agresión']):
+                    # Intentar una nueva búsqueda con umbral más bajo para el Régimen Disciplinario
+                    logger.info("Intentando búsqueda específica en Régimen Disciplinario...")
+                    self.similarity_threshold = 0.1  # Reducir temporalmente el umbral
+                    relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
+                    self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', 0.3))  # Restaurar umbral original
+                
+                if not relevant_chunks:
+                    standard_no_info_response = f"👨‍⚕️ Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
                 
                 return {
                     "query": query,
@@ -1061,67 +949,34 @@ Responde ÚNICAMENTE a la consulta con información del contexto. SOLO GENERA UN
                     "sources": []
                 }
             
-            # Construir contexto de manera segura, incluyendo la fuente de cada fragmento
+            # Construir contexto
             context_chunks = []
             sources = []
             
-            # Establecer un umbral de relevancia mínima - mucho más permisivo ahora
-            relevance_threshold = float(os.getenv('RELEVANCE_THRESHOLD', '20.0'))  # Aumentado desde 17.0 a 20.0
-            has_relevant_content = False
-            
-            for i, chunk in enumerate(relevant_chunks):
-                # Verificar si el chunk tiene contenido
-                chunk_has_content = False
-                content = ""
-                
+            for chunk in relevant_chunks:
                 if "content" in chunk and chunk["content"].strip():
                     content = chunk["content"]
-                    chunk_has_content = True
                 elif "text" in chunk and chunk["text"].strip():
                     content = chunk["text"]
-                    chunk_has_content = True
                 else:
-                    logger.warning(f"Chunk sin contenido válido: {chunk}")
-                    continue  # Saltar este chunk
+                    continue
                 
-                # Evaluar si el chunk es realmente relevante para la consulta
-                if 'distance' in chunk:
-                    distance = chunk['distance']
-                    logger.info(f"Chunk {i+1} distancia: {distance}")
-                    if distance < relevance_threshold:
-                        has_relevant_content = True
-                        logger.info(f"Chunk {i+1} es relevante (distancia: {distance})")
-                
-                # Obtener información de la fuente
                 source = ""
                 if "filename" in chunk and chunk["filename"]:
-                    source = chunk["filename"]
-                    # Extraer solo el nombre del archivo sin la ruta
-                    source = os.path.basename(source)
-                    # Eliminar extensión .pdf
-                    source = source.replace('.pdf', '')
+                    source = os.path.basename(chunk["filename"]).replace('.pdf', '')
                     if source and source not in sources:
                         sources.append(source)
                 
-                # Solo agregar chunks con contenido válido
-                if chunk_has_content:
-                    # Formatear el fragmento con su fuente pero sin usar FRAGMENTO en el mensaje
-                    # para evitar que el modelo lo copie en la respuesta
-                    formatted_chunk = f"Información de {source}:\n{content}"
-                    context_chunks.append(formatted_chunk)
-                    logger.info(f"Agregado chunk relevante de {source} (distancia: {chunk.get('distance', 'N/A')})")
+                formatted_chunk = f"Información de {source}:\n{content}"
+                context_chunks.append(formatted_chunk)
+                logger.info(f"Agregado chunk relevante de {source}")
             
             # Unir los chunks para formar el contexto
             context = '\n\n'.join(context_chunks)
             
-            # Si no hay contexto después de filtrar o no hay contenido relevante, usar mensaje informativo
-            if not context.strip() or not has_relevant_content:
-                logger.warning("No se encontró contexto suficientemente relevante para la consulta.")
-                # Respuesta estándar cuando no hay información disponible
-                if has_greeting:
-                    standard_no_info_response = f"👨‍⚕️ ¡Hola! Soy DrCecim. No tengo información suficiente sobre esto en mis documentos. Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar. ¡Estoy aquí para ayudarte!"
-                else:
-                    standard_no_info_response = f"👨‍⚕️ No tengo información suficiente sobre esto en mis documentos. Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar. ¡Estoy aquí para ayudarte!"
+            if not context.strip():
+                logger.warning("No se encontró contexto suficientemente relevante")
+                standard_no_info_response = f"👨‍⚕️ Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
                 
                 return {
                     "query": query,
@@ -1130,57 +985,27 @@ Responde ÚNICAMENTE a la consulta con información del contexto. SOLO GENERA UN
                     "sources": []
                 }
             
-            logger.info(f"Se encontraron {len(context_chunks)} fragmentos relevantes de {len(sources)} fuentes: {', '.join(sources)}")
+            logger.info(f"Se encontraron {len(context_chunks)} fragmentos relevantes de {len(sources)} fuentes")
             
-            # Generar respuesta con el contexto y las fuentes
+            # Generar respuesta
             response = self.generate_response(query, context, sources)
             
-            # Asegurar que la respuesta tenga el formato adecuado
-            if has_greeting and "DrCecim" not in response:
-                # Verificar si la respuesta ya tiene el emoji del doctor
-                if response.startswith("👨‍⚕️"):
-                    # Reemplazar el emoji con el saludo completo
-                    response = greeting_prefix + response[5:].lstrip()
-                else:
-                    response = greeting_prefix + response
-            elif not has_greeting and "DrCecim" in response:
-                # Si no hay saludo, eliminar menciones a DrCecim
-                response = re.sub(r'(?i)(Soy DrCecim\.?|DrCecim aquí\.?|DrCecim:)\s*', f'👨‍⚕️ ', response)
-            
-            if not any(emoji in response for emoji in information_emojis + greeting_emojis):
-                response = f"{response} {info_emoji}"
-            
-            # Agregar fuente de información si hay sources
-            final_response = response
-            if sources and len(sources) > 0:
-                # Limpiar nombres de fuentes (quitar .pdf, guiones bajos, etc.)
-                clean_sources = []
-                for source in sources:
-                    # Reemplazar guiones bajos y guiones con espacios
-                    clean_source = source.replace('_', ' ').replace('-', ' ')
-                    clean_sources.append(clean_source)
-                
-                # Agregar fuente al final del mensaje
-                if len(clean_sources) == 1:
-                    final_response = f"{response}\n\nEsta información la puedes encontrar en: {clean_sources[0]}"
-                else:
-                    sources_text = ", ".join(clean_sources)
-                    final_response = f"{response}\n\nEsta información la puedes encontrar en: {sources_text}"
+            # Agregar fuentes al final de la respuesta
+            if sources:
+                clean_sources = [source.replace('_', ' ').replace('-', ' ') for source in sources]
+                sources_text = ", ".join(clean_sources)
+                response = f"{response}\n\nEsta información la puedes encontrar en: {sources_text}"
             
             return {
                 "query": query,
-                "response": final_response,
+                "response": response,
                 "relevant_chunks": relevant_chunks,
                 "sources": sources
             }
             
         except Exception as e:
             logger.error(f"Error en process_query: {str(e)}", exc_info=True)
-            if has_greeting:
-                error_response = f"👨‍⚕️ Soy DrCecim. Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
-            else:
-                error_response = f"👨‍⚕️ Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
-            
+            error_response = f"👨‍⚕️ Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
             return {
                 "query": query,
                 "response": error_response,

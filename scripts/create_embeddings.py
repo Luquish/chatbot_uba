@@ -17,7 +17,7 @@ load_dotenv()
 # Configuración de logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -54,26 +54,31 @@ class EmbeddingGenerator:
         self.embeddings_dir = Path(embeddings_dir)
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         
-        # Inicializar el modelo de embeddings adecuado para español
-        embedding_model_options = [
-            'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',  # Buen modelo multilingüe
-            'hiiamsid/sentence_similarity_spanish_es',  # Especializado en español
-            'intfloat/multilingual-e5-large'  # Modelo más grande y preciso
-        ]
-        
-        # Por defecto usar el primer modelo, pero permitir configuración
-        embedding_model_name = os.getenv('EMBEDDING_MODEL', embedding_model_options[0])
-        logger.info(f"Usando modelo de embeddings: {embedding_model_name}")
+        # Modelo optimizado para español y documentos administrativos
+        model_name = 'hiiamsid/sentence_similarity_spanish_es'
+        logger.info(f"Intentando cargar modelo de embeddings: {model_name}")
         
         try:
-            self.model = SentenceTransformer(embedding_model_name)
-            logger.info(f"Modelo de embeddings inicializado: {embedding_model_name}")
+            # Intentar usar GPU si está disponible
+            import torch
+            if torch.cuda.is_available():
+                device = 'cuda'
+            elif torch.backends.mps.is_available():
+                device = 'mps'
+            else:
+                device = 'cpu'
+            logger.info(f"Usando dispositivo: {device}")
+            
+            self.model = SentenceTransformer(model_name, device=device)
+            self.model.max_seq_length = 512  # Ajustar según necesidad
+            logger.info(f"Modelo de embeddings inicializado: {model_name}")
             logger.info(f"Dimensión del modelo: {self.model.get_sentence_embedding_dimension()}")
         except Exception as e:
-            logger.error(f"Error al cargar modelo de embeddings: {str(e)}")
-            # Fallback al modelo más básico si hay error
-            self.model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
-            logger.info("Usando modelo de fallback")
+            logger.error(f"Error al cargar modelo primario: {str(e)}")
+            # Usar modelo de respaldo
+            model_name = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+            logger.warning(f"Usando modelo de respaldo: {model_name}")
+            self.model = SentenceTransformer(model_name, device=device)
         
         self.is_production = ENVIRONMENT == 'production'
         
@@ -154,55 +159,61 @@ class EmbeddingGenerator:
         
         embeddings = []
         
-        # Verificar textos vacíos o inválidos
+        # Preprocesar textos
         valid_texts = []
         invalid_indices = []
         
         for i, text in enumerate(texts):
-            if not text or not isinstance(text, str) or len(text.strip()) < 10:
-                logger.warning(f"Texto inválido en índice {i}: '{text[:20]}...'")
+            if not text or not isinstance(text, str):
+                logger.warning(f"Texto inválido en índice {i}")
                 invalid_indices.append(i)
-                # Usar un texto por defecto para evitar errores
-                valid_texts.append("texto vacío o inválido")
+                valid_texts.append("texto inválido")
             else:
+                # Limpiar y preparar el texto
+                text = text.strip()
+                if len(text) < 10:
+                    logger.warning(f"Texto muy corto en índice {i}")
+                    text = text + " " + text  # Duplicar texto corto
                 valid_texts.append(text)
-        
-        if invalid_indices:
-            logger.warning(f"Se encontraron {len(invalid_indices)} textos inválidos de {total_texts}")
         
         # Procesar en batches
         try:
             for i in tqdm(range(0, len(valid_texts), batch_size), desc="Generando embeddings"):
                 batch = valid_texts[i:i + batch_size]
                 
-                # Limitar longitud de textos para evitar errores con tokens muy largos
-                batch = [text[:8192] if len(text) > 8192 else text for text in batch]
+                # Truncar textos muy largos
+                batch = [text[:512] if len(text) > 512 else text for text in batch]
                 
                 try:
-                    batch_embeddings = self.model.encode(batch, show_progress_bar=False, 
-                                                    convert_to_numpy=True, normalize_embeddings=True)
+                    # Generar embeddings sin normalización forzada
+                    batch_embeddings = self.model.encode(
+                        batch,
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                        normalize_embeddings=False  # Importante: no forzar normalización
+                    )
                     embeddings.append(batch_embeddings)
                 except Exception as e:
-                    logger.error(f"Error al generar embeddings para batch {i}: {str(e)}")
-                    # Crear embeddings vacíos para este batch si falla
-                    dummy_embeddings = np.zeros((len(batch), self.model.get_sentence_embedding_dimension()))
+                    logger.error(f"Error en batch {i}: {str(e)}")
+                    # Usar embeddings de respaldo
+                    dim = self.model.get_sentence_embedding_dimension()
+                    dummy_embeddings = np.random.normal(0, 0.1, (len(batch), dim))
                     embeddings.append(dummy_embeddings)
-                    
-            # Unir todos los embeddings
-            all_embeddings = np.vstack(embeddings)
-            logger.info(f"Embeddings generados: {all_embeddings.shape}")
-            
-            # Verificar si hay NaNs y reemplazarlos
-            if np.isnan(all_embeddings).any():
-                logger.warning("Se detectaron NaNs en los embeddings. Reemplazando con ceros.")
-                all_embeddings = np.nan_to_num(all_embeddings)
-            
-            return all_embeddings
-            
+        
         except Exception as e:
-            logger.error(f"Error general al generar embeddings: {str(e)}")
+            logger.error(f"Error general en generación de embeddings: {str(e)}")
             raise
         
+        # Concatenar todos los embeddings
+        all_embeddings = np.vstack(embeddings)
+        
+        # Normalizar al final si es necesario
+        if np.any(np.sum(all_embeddings * all_embeddings, axis=1) > 1.0):
+            logger.info("Normalizando embeddings finales...")
+            all_embeddings = all_embeddings / np.sqrt(np.sum(all_embeddings * all_embeddings, axis=1, keepdims=True))
+        
+        return all_embeddings
+    
     def create_faiss_index(self, embeddings: np.ndarray) -> faiss.Index:
         """
         Crea un índice FAISS para los embeddings más optimizado.
