@@ -421,6 +421,7 @@ async def test_message():
         dict: Resultado del envío del mensaje de prueba
     """
     if not MY_PHONE_NUMBER:
+        logger.error("No se ha configurado MY_PHONE_NUMBER en las variables de entorno")
         return {"error": "No se ha configurado MY_PHONE_NUMBER en las variables de entorno"}
     
     try:
@@ -434,7 +435,7 @@ async def test_message():
         # Eliminar el '+' si existe y cualquier otro caracter no numérico
         formatted_phone = re.sub(r'[^0-9]', '', formatted_phone)
             
-        logger.info(f"Enviando mensaje de prueba a: {formatted_phone}")
+        logger.info(f"Enviando mensaje de prueba a: {MY_PHONE_NUMBER} (formateado: {formatted_phone})")
         
         # Configurar headers para la API de WhatsApp
         headers = {
@@ -469,6 +470,7 @@ async def test_message():
                 "success": True,
                 "message_id": response_data.get("messages", [{}])[0].get("id"),
                 "status": "sent",
+                "to": MY_PHONE_NUMBER,
                 "whatsapp_api_response": response_data
             }
         else:
@@ -477,6 +479,7 @@ async def test_message():
             return {
                 "success": False,
                 "error": f"Error al enviar mensaje: {error_message} (Código: {error_code})",
+                "to": MY_PHONE_NUMBER,
                 "details": response_data
             }
     

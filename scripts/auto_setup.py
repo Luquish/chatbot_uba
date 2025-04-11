@@ -74,12 +74,11 @@ async def start_backend():
         try:
             response = requests.get("http://localhost:8000/health", timeout=1)
             if response.status_code == 200:
-                logger.info("Backend iniciado correctamente")
+                logger.info("Backend iniciado...")
                 return True
         except requests.exceptions.RequestException:
             pass
         
-        logger.info(f"Esperando a que el backend esté listo ({i+1}/{max_retries})...")
         await asyncio.sleep(1)
     
     logger.error("No se pudo iniciar el backend")
@@ -113,12 +112,11 @@ async def start_ngrok():
                 data = response.json()
                 if data.get("tunnels"):
                     ngrok_url = data["tunnels"][0]["public_url"]
-                    logger.info(f"ngrok iniciado en: {ngrok_url}")
+                    logger.info(f"ngrok iniciado...")
                     return ngrok_url
         except requests.exceptions.RequestException:
             pass
         
-        logger.info(f"Esperando a que ngrok esté listo ({i+1}/{max_retries})...")
         await asyncio.sleep(1)
     
     logger.error("No se pudo iniciar ngrok")
@@ -170,6 +168,12 @@ async def verify_token():
 async def send_test_message():
     """Envía un mensaje de prueba."""
     try:
+        my_phone = os.getenv('MY_PHONE_NUMBER')
+        if not my_phone:
+            logger.error("No se ha configurado MY_PHONE_NUMBER en el archivo .env")
+            return False
+            
+        logger.info(f"Enviando mensaje de prueba al número: {my_phone}")
         response = requests.get("http://localhost:8000/test-message")
         if response.status_code == 200:
             data = response.json()

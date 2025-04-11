@@ -35,14 +35,16 @@ INTENT_EXAMPLES = {
     },
     'pregunta_nombre': {
         'examples': [
-            "como me llamo",
+            "como me llamo yo",
             "cual es mi nombre",
-            "sabes mi nombre",
+            "sabes como me llamo",
             "como sabes mi nombre",
             "por que sabes mi nombre",
-            "de donde sacaste mi nombre"
+            "de donde sacaste mi nombre",
+            "como conseguiste mi nombre",
+            "por que conoces mi nombre"
         ],
-        'context': "El usuario pregunta sobre cómo conocemos su nombre"
+        'context': "El usuario pregunta específicamente sobre cómo conocemos su nombre"
     },
     'cortesia': {
         'examples': [
@@ -54,12 +56,42 @@ INTENT_EXAMPLES = {
         ],
         'context': "El usuario hace una pregunta de cortesía"
     },
+    'referencia_anterior': {
+        'examples': [
+            "resúmeme eso",
+            "resumeme eso",
+            "puedes resumir lo anterior",
+            "podrias resumirme el mensaje anterior",
+            "podrias resumirme ese texto",
+            "resume el mensaje anterior",
+            "explica de nuevo",
+            "explícame eso",
+            "explicame eso de nuevo",
+            "acorta esa explicación",
+            "simplifica lo que dijiste",
+            "dímelo más corto",
+            "dimelo mas corto",
+            "puedes abreviar",
+            "puedes hacer un resumen"
+        ],
+        'context': "El usuario está pidiendo un resumen o clarificación del mensaje anterior"
+    },
     'pregunta_capacidades': {
         'examples': [
             "qué podés hacer",
             "en qué me podés ayudar",
             "para qué servís",
-            "qué tipo de consultas puedo hacer"
+            "qué tipo de consultas puedo hacer",
+            "que sabes",
+            "que sabes hacer",
+            "que podes hacer",
+            "que me podes decir",
+            "cuales son tus funciones",
+            "que funciones tenes",
+            "que te puedo preguntar",
+            "que puedo preguntarte",
+            "que tipos de dudas puedo consultar",
+            "en que me podes ayudar"
         ],
         'context': "El usuario quiere saber las capacidades del bot"
     },
@@ -591,6 +623,10 @@ class RAGSystem:
         self.base_model = os.getenv('BASE_MODEL_NAME')
         self.fallback_model = os.getenv('FALLBACK_MODEL_NAME')
         
+        # Normalizar los ejemplos de intenciones para mejorar la detección
+        self.normalized_intent_examples = self._normalize_intent_examples()
+        logger.info("Ejemplos de intenciones normalizados para mejorar la clasificación")
+        
         # Verificar si existe modelo fine-tuneado
         model_exists = os.path.exists(model_path) and os.path.isdir(model_path)
         
@@ -997,21 +1033,59 @@ INSTRUCCIONES:
                  "Para confirmar cualquier cambio reciente, consultá en alumnos@fmed.uba.ar"
         return f"{response}{warning}"
 
+    def _normalize_intent_examples(self) -> Dict:
+        """
+        Normaliza los ejemplos de intenciones para hacer comparaciones más robustas
+        """
+        normalized_examples = {}
+        
+        for intent, data in INTENT_EXAMPLES.items():
+            examples = data['examples']
+            norm_examples = []
+            
+            for example in examples:
+                # Aplicar la misma normalización que a las consultas
+                norm_example = example.lower().strip()
+                norm_example = unidecode(norm_example)  # Eliminar tildes
+                norm_example = re.sub(r'[^\w\s]', '', norm_example)  # Eliminar signos de puntuación
+                norm_example = re.sub(r'\s+', ' ', norm_example).strip()  # Normalizar espacios
+                norm_examples.append(norm_example)
+                
+            normalized_examples[intent] = {
+                'examples': norm_examples,
+                'context': data['context']
+            }
+            
+        return normalized_examples
+
     def _get_query_intent(self, query: str) -> Tuple[str, float]:
         """
         Determina la intención de la consulta usando similitud semántica
         """
+        # Normalización del texto
+        query_original = query
         query = query.lower().strip()
+        query = unidecode(query)  # Eliminar tildes
+        query = re.sub(r'[^\w\s]', '', query)  # Eliminar signos de puntuación
+        query = re.sub(r'\s+', ' ', query).strip()  # Normalizar espacios
+        
+        if query_original != query:
+            logger.info(f"Consulta normalizada: '{query_original}' → '{query}'")
+            
         query_embedding = self.embedding_model.encode([query])[0]
         
         max_similarity = -1
         best_intent = 'desconocido'
         
-        for intent, data in INTENT_EXAMPLES.items():
+        # Usar ejemplos normalizados
+        for intent, data in self.normalized_intent_examples.items():
             examples = data['examples']
             example_embeddings = self.embedding_model.encode(examples)
             similarities = cosine_similarity([query_embedding], example_embeddings)[0]
             avg_similarity = np.mean(similarities)
+            
+            # Para debugging
+            logger.debug(f"Intención: {intent}, similitud: {avg_similarity:.2f}")
             
             if avg_similarity > max_similarity:
                 max_similarity = avg_similarity
@@ -1029,6 +1103,7 @@ INSTRUCCIONES:
         is_greeting = intent == 'saludo'
         is_courtesy = intent == 'cortesia'
         is_acknowledgment = intent == 'agradecimiento'
+        is_capabilities = intent == 'pregunta_capacidades'
         
         # Lista de respuestas alegres para agradecimientos
         happy_responses = [
@@ -1041,9 +1116,20 @@ INSTRUCCIONES:
             "¡Bárbaro! Cualquier otra consulta, aquí estoy 🤓"
         ]
         
+        # Lista de respuestas para preguntas sobre capacidades
+        capabilities_responses = [
+            "Soy un asistente especializado en:\n- Trámites administrativos de la facultad\n- Consultas sobre el reglamento y normativas\n- Información académica general\n- Procesos de inscripción y regularidad",
+            "Puedo ayudarte con:\n- Trámites y gestiones administrativas\n- Información sobre reglamentos y normativas\n- Consultas académicas generales\n- Temas de inscripción y regularidad",
+            "Me especializo en:\n- Asistencia con trámites administrativos\n- Información sobre reglamentos\n- Consultas académicas\n- Temas de inscripción y regularidad"
+        ]
+        
         # Si es un agradecimiento, devolver una respuesta alegre
         if is_acknowledgment:
             return random.choice(happy_responses)
+            
+        # Si es una pregunta sobre capacidades, devolver una respuesta específica
+        if is_capabilities:
+            return random.choice(capabilities_responses)
         
         # Personalizar el prompt según si tenemos el nombre del usuario
         user_context = f"El usuario se llama {user_name}. " if user_name else ""
@@ -1071,6 +1157,57 @@ Instrucciones específicas:
 
         return self.model.generate(prompt)
 
+    def _summarize_previous_message(self, user_id: str) -> str:
+        """
+        Genera un resumen del mensaje previo para un usuario.
+        
+        Args:
+            user_id (str): ID del usuario
+            
+        Returns:
+            str: Resumen generado
+        """
+        # Obtener historial del usuario
+        history = self.get_user_history(user_id)
+        
+        if not history or len(history) < 1:
+            return "No tengo un mensaje previo para resumir. ¿Puedes hacerme una pregunta específica?"
+        
+        # Obtener el último mensaje enviado por el bot
+        last_query, last_response = history[-1]
+        
+        # Si el último mensaje es muy corto, no necesita resumen
+        if len(last_response) < 150:
+            return f"Mi mensaje anterior ya era bastante breve: \"{last_response}\""
+        
+        # Generar un resumen usando el modelo
+        prompt = f"""[INST]
+Como DrCecim, asistente virtual de la Facultad de Medicina UBA:
+
+TAREA:
+Genera un resumen claro y conciso de tu mensaje anterior.
+
+MENSAJE ORIGINAL:
+{last_response}
+
+INSTRUCCIONES:
+1. Resume el contenido principal manteniendo la información clave
+2. El resumen debe ser aproximadamente 50% más corto que el original
+3. Mantén el mismo tono amigable y profesional
+4. Incluye los puntos más importantes y relevantes
+5. Si hay pasos o instrucciones, presérvales en formato de lista
+6. No agregues información nueva que no estaba en el mensaje original
+7. No uses frases como "En resumen" o "En conclusión"
+[/INST]"""
+
+        try:
+            summary = self.model.generate(prompt)
+            emoji = random.choice(information_emojis)
+            return f"{emoji} {summary}"
+        except Exception as e:
+            logger.error(f"Error al generar resumen: {str(e)}")
+            return "Lo siento, no pude generar un resumen en este momento. ¿Podrías hacerme una pregunta más específica?"
+
     def process_query(self, query: str, user_id: str = None, user_name: str = None) -> Dict[str, Any]:
         """
         Procesa una consulta utilizando el nuevo sistema de clasificación semántica
@@ -1084,6 +1221,26 @@ Instrucciones específicas:
             # Determinar la intención
             intent, confidence = self._get_query_intent(query)
             logger.info(f"Intención detectada: {intent} (confianza: {confidence:.2f})")
+            
+            # Si es una referencia a un mensaje anterior
+            if intent == 'referencia_anterior':
+                if not user_id or not self.get_user_history(user_id):
+                    response = "Lo siento, no tengo mensajes previos para resumir. ¿Puedes hacerme una pregunta específica?"
+                else:
+                    response = self._summarize_previous_message(user_id)
+                
+                # Actualizar historial
+                if user_id:
+                    self.update_user_history(user_id, query, response)
+                    
+                return {
+                    "query": query,
+                    "response": response,
+                    "query_type": intent,
+                    "confidence": confidence,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
             
             # Si es una pregunta sobre el nombre
             if intent == 'pregunta_nombre':
