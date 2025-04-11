@@ -55,7 +55,7 @@ class EmbeddingGenerator:
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         
         # Modelo optimizado para español y documentos administrativos
-        model_name = 'hiiamsid/sentence_similarity_spanish_es'
+        model_name = os.getenv('EMBEDDING_MODEL_NAME', 'hiiamsid/sentence_similarity_spanish_es')
         logger.info(f"Intentando cargar modelo de embeddings: {model_name}")
         
         try:

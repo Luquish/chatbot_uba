@@ -3,7 +3,7 @@ import logging
 import json
 import requests
 from pathlib import Path
-from typing import List, Dict, Optional, Union, Any
+from typing import List, Dict, Optional, Union, Any, Tuple
 import torch
 import faiss
 import pandas as pd
@@ -15,26 +15,162 @@ import numpy as np
 import huggingface_hub
 import psutil  # Añadido para verificar la memoria disponible
 import re
+import random
+from unidecode import unidecode
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Crear directorio de logs si no existe
-log_dir = Path('logs')
-log_dir.mkdir(exist_ok=True)
+Path("logs").mkdir(exist_ok=True)
 
-# Lista de palabras de saludo
-greeting_words = ['hola', 'buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias', 
-                'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
+# Nueva estructura de intenciones para clasificación semántica
+INTENT_EXAMPLES = {
+    'saludo': {
+        'examples': [
+            "hola",
+            "buenos días",
+            "qué tal",
+            "buenas"
+        ],
+        'context': "El usuario está iniciando la conversación o saludando"
+    },
+    'pregunta_nombre': {
+        'examples': [
+            "como me llamo",
+            "cual es mi nombre",
+            "sabes mi nombre",
+            "como sabes mi nombre",
+            "por que sabes mi nombre",
+            "de donde sacaste mi nombre"
+        ],
+        'context': "El usuario pregunta sobre cómo conocemos su nombre"
+    },
+    'cortesia': {
+        'examples': [
+            "cómo estás",
+            "como estas",
+            "como te sentis",
+            "como va",
+            "todo bien"
+        ],
+        'context': "El usuario hace una pregunta de cortesía"
+    },
+    'pregunta_capacidades': {
+        'examples': [
+            "qué podés hacer",
+            "en qué me podés ayudar",
+            "para qué servís",
+            "qué tipo de consultas puedo hacer"
+        ],
+        'context': "El usuario quiere saber las capacidades del bot"
+    },
+    'identidad': {
+        'examples': [
+            "quién sos",
+            "cómo te llamás",
+            "sos un bot",
+            "sos una persona"
+        ],
+        'context': "El usuario pregunta sobre la identidad del bot"
+    },
+    'consulta_administrativa': {
+        'examples': [
+            "cómo hago un trámite",
+            "necesito una constancia",
+            "dónde presento documentación",
+            "quiero dar de baja una materia",
+            "cuántas materias debo aprobar",
+            "en cuánto tiempo tengo que terminar la carrera",
+            "cómo se define el año académico",
+            "qué derechos tengo para inscribirme"
+        ],
+        'context': "El usuario necesita información sobre trámites administrativos o condiciones de regularidad"
+    },
+    'consulta_academica': {
+        'examples': [
+            "cuándo es el parcial",
+            "dónde encuentro el programa",
+            "cómo es la cursada",
+            "qué necesito para aprobar",
+            "cómo se evalúa la calidad de enseñanza",
+            "qué materias puedo cursar"
+        ],
+        'context': "El usuario necesita información académica"
+    },
+    'consulta_medica': {
+        'examples': [
+            "me duele la cabeza",
+            "tengo síntomas de",
+            "dónde puedo consultar por un dolor",
+            "necesito un diagnóstico",
+            "tengo fiebre"
+        ],
+        'context': "El usuario hace una consulta médica que no podemos responder"
+    },
+    'consulta_reglamento': {
+        'examples': [
+            "qué dice el reglamento sobre",
+            "está permitido",
+            "cuáles son las normas",
+            "qué pasa si no cumplo",
+            "qué medidas toman si me porto mal",
+            "quién decide las sanciones",
+            "qué castigos hay",
+            "para qué sirven las medidas disciplinarias",
+            "qué sanciones aplican",
+            "si cometo una falta",
+            "quién evalúa mi comportamiento",
+            "qué pasa si rompo las reglas"
+        ],
+        'context': "El usuario pregunta sobre normativas, reglamentos y medidas disciplinarias"
+    },
+    'agradecimiento': {
+        'examples': [
+            "perfecto",
+            "gracias",
+            "ok",
+            "okk",
+            "okey",
+            "okay",
+            "dale",
+            "listo",
+            "entendido",
+            "genial",
+            "excelente",
+            "bárbaro",
+            "buenísimo",
+            "joya"
+        ],
+        'context': "El usuario agradece o confirma que entendió la información"
+    }
+}
+
+GREETING_WORDS = ['hola', 'buenos dias', 'buenas tardes', 'buenas noches', 'buen dia', 'saludos', 'que tal']
 
 # Lista de emojis para enriquecer las respuestas
 information_emojis = ["📚", "📖", "ℹ️", "📊", "🔍", "📝", "📋", "📈", "📌", "🧠"]
 greeting_emojis = ["👋", "😊", "🤓", "👨‍⚕️", "👩‍⚕️", "🎓", "🌟"]
+warning_emojis = ["⚠️", "❗", "⚡", "🚨"]
+success_emojis = ["✅", "💫", "🎉", "💡"]
+medical_emojis = ["🏥", "👨‍⚕️", "👩‍⚕️", "🩺"]
+
+# Palabras clave para expansión de consultas
+QUERY_EXPANSIONS = {
+    'inscripcion': ['inscribir', 'anotarse', 'anotar', 'registrar', 'inscripto'],
+    'constancia': ['certificado', 'comprobante', 'papel', 'documento'],
+    'regular': ['regularidad', 'condición', 'estado', 'situación'],
+    'final': ['examen', 'evaluación', 'rendir', 'dar'],
+    'recursada': ['recursar', 'volver a cursar', 'segunda vez'],
+    'correlativa': ['correlatividad', 'requisito', 'necesito', 'puedo cursar'],
+    'baja': ['dar de baja', 'abandonar', 'dejar', 'salir'],
+}
 
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # Salida a consola
-        logging.FileHandler(log_dir / 'app.log')  # Salida a archivo
+        logging.FileHandler(Path('logs') / 'app.log')  # Salida a archivo
     ]
 )
 logger = logging.getLogger(__name__)
@@ -445,6 +581,10 @@ class RAGSystem:
         self.device = device
         self.embeddings_dir = Path(embeddings_dir)
         
+        # Tendríamos:
+        self.conversation_histories = {}  # Diccionario: user_id -> historial
+        self.max_history_length = 5
+        
         # Obtener configuración
         self.use_api = os.getenv('USE_API', 'True').lower() == 'true'
         self.api_token = os.getenv('HUGGING_FACE_HUB_TOKEN')
@@ -477,7 +617,7 @@ class RAGSystem:
             raise RuntimeError(f"No se pudo inicializar ningún modelo (local ni API): {str(e)}")
         
         # Cargar modelo de embeddings
-        embedding_model_name = 'hiiamsid/sentence_similarity_spanish_es'  # Modelo fijo para coincidir con el índice
+        embedding_model_name = os.getenv('EMBEDDING_MODEL_NAME', 'hiiamsid/sentence_similarity_spanish_es')
         try:
             logger.info(f"Intentando cargar modelo de embeddings: {embedding_model_name}")
             self.embedding_model = SentenceTransformer(embedding_model_name)
@@ -494,7 +634,7 @@ class RAGSystem:
 
         # Configurar umbral de similitud
         self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', '0.1'))  # Umbral más permisivo
-        
+
     def _load_local_model(self, model_path: str):
         """Carga el modelo local con la configuración apropiada"""
         load_kwargs = {
@@ -635,81 +775,7 @@ class RAGSystem:
             # Verificar si los resultados son relevantes
             if not results:
                 logger.warning("No se encontraron chunks relevantes para la consulta.")
-                
-                # Verificar si la consulta es sobre trámites comunes
-                query_lower = query.lower()
-                tramites_keywords = {
-                    'constancia': 'a) Constancia de Alumno Regular',
-                    'alumno regular': 'a) Constancia de Alumno Regular',
-                    'baja': 'b) Baja de Materias',
-                    'dar de baja': 'b) Baja de Materias',
-                    'reincorporación': 'c) Reincorporación',
-                    'reincorporacion': 'c) Reincorporación',
-                    'recursada': 'd) Recursadas',
-                    'recursar': 'd) Recursadas'
-                }
-                
-                # Buscar coincidencias en las palabras clave
-                tramite_encontrado = None
-                for keyword, tramite in tramites_keywords.items():
-                    if keyword in query_lower:
-                        tramite_encontrado = tramite
-                    break
-            
-                if tramite_encontrado:
-                    # Usar la información base del trámite correspondiente
-                    if 'constancia' in query_lower or 'alumno regular' in query_lower:
-                        response = """Para tramitar la constancia de alumno regular:
-1. **Tramitar en el Sitio de Inscripciones**
-2. Ingresar con DNI y contraseña
-3. Seleccionar "Constancia de alumno regular"
-4. Imprimir y presentar en ventanilla del Ciclo Biomédico con Libreta/DNI"""
-                    elif 'baja' in query_lower:
-                        response = """Para dar de baja una materia:
-- **Plazo máximo**: 2 semanas antes del primer parcial o hasta el 25% de la cursada
-- **Pasos**:
-  1. Tramitar en Sitio de Inscripciones
-  2. Seleccionar "Baja de asignatura"
-  3. No requiere presentación en ventanilla si el estado es "Resuelto Positivamente" """
-                    elif 'reincorporación' in query_lower or 'reincorporacion' in query_lower:
-                        response = """Para solicitar la reincorporación:
-- **Primera reincorporación**: 
-  - Trámite automático en el sistema
-  - No requiere presentación en ventanilla
-- **Segunda reincorporación o más**:
-  1. Tramitar en Sitio de Inscripciones
-  2. Presentar documentación en ventanilla
-  3. La Comisión de Readmisión evaluará el caso"""
-                    else:  # recursada
-                        response = """Para solicitar una recursada:
-- **Si figura como BAJA en cursada anterior**:
-  - Sin arancel
-  - Inscripción normal como primera vez
-- **Si NO figura como BAJA**:
-  1. Generar trámite
-  2. Pagar arancel en Tesorería
-  3. Presentar comprobante en buzones del Ciclo Biomédico"""
-                    
-                    return {
-                        "query": query,
-                        "response": response,
-                        "relevant_chunks": [],
-                        "sources": ["Información de Trámites Comunes"]
-                    }
-                else:
-                    # Si no es un trámite común, usar respuesta estándar con derivación por email
-                    has_greeting = any(word in query.lower() for word in greeting_words)
-                    if has_greeting:
-                        standard_no_info_response = f"👨‍⚕️ ¡Hola! Soy DrCecim. Lo siento, no tengo información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas. Si tienes otras preguntas sobre temas relacionados con la Facultad de Medicina, no dudes en consultarme."
-                    else:
-                        standard_no_info_response = f"👨‍⚕️ Lo siento, no tengo información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas. Si tienes otras preguntas sobre temas relacionados con la Facultad de Medicina, no dudes en consultarme."
-                    
-                return {
-                    "query": query,
-                        "response": standard_no_info_response,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
+                return []
             
             # Filtrar por similitud y duplicados
             filtered_results = []
@@ -735,18 +801,18 @@ class RAGSystem:
                                 seen_content.add(simple_text)
                                 filtered_results.append(result)
                                 logger.info(f"Chunk de Régimen Disciplinario aceptado con similitud: {similarity:.3f}")
-            else:
+                    else:
                         # Mantener umbral normal para otros documentos
                         if similarity >= self.similarity_threshold and simple_text not in seen_content:
                             seen_content.add(simple_text)
                             filtered_results.append(result)
                             logger.info(f"Chunk de otro documento aceptado con similitud: {similarity:.3f}")
-                        else:
-                            # Para otras consultas, usar el umbral normal
-                            if similarity >= self.similarity_threshold and simple_text not in seen_content:
-                                seen_content.add(simple_text)
-                                filtered_results.append(result)
-                                logger.info(f"Chunk aceptado con similitud: {similarity:.3f}")
+                else:
+                    # Para otras consultas, usar el umbral normal
+                    if similarity >= self.similarity_threshold and simple_text not in seen_content:
+                        seen_content.add(simple_text)
+                        filtered_results.append(result)
+                        logger.info(f"Chunk aceptado con similitud: {similarity:.3f}")
             
             # Ordenar por similitud y limitar a k resultados
             filtered_results = sorted(filtered_results, key=lambda x: x.get('similarity', 0.0), reverse=True)[:k]
@@ -760,167 +826,365 @@ class RAGSystem:
             logger.error(f"Error en la búsqueda de chunks: {str(e)}", exc_info=True)
             return []
         
-    def generate_response(self, query: str, context: str, sources: List[str] = None) -> str:
+    def _format_source_name(self, source: str) -> str:
         """
-        Genera una respuesta basada en el contexto y la consulta.
+        Formatea el nombre de la fuente eliminando extensiones y caracteres especiales.
         
         Args:
-            query (str): Consulta del usuario
-            context (str): Contexto relevante recuperado
-            sources (List[str]): Lista de fuentes de información
+            source (str): Nombre original de la fuente (ej: "Condiciones_Regularidad.pdf")
             
         Returns:
-            str: Respuesta generada
+            str: Nombre formateado (ej: "Condiciones de Regularidad")
         """
-        # Prompt base para el asistente administrativo
-        system_prompt = """Eres un asistente administrativo especializado de la Universidad de Buenos Aires (UBA).
-Tu rol es proporcionar información precisa sobre trámites y procedimientos administrativos.
+        # Eliminar extensión .pdf
+        source = source.replace('.pdf', '')
+        
+        # Reemplazar guiones bajos y guiones medios por espacios
+        source = source.replace('_', ' ').replace('-', ' ')
+        
+        # Capitalizar palabras
+        source = ' '.join(word.capitalize() for word in source.split())
+        
+        return source
 
-INSTRUCCIONES IMPORTANTES:
-1. Responde SOLO con información verificada que encuentres en el contexto proporcionado
-2. Si no tienes información suficiente en el contexto, sigue estas pautas:
+    def generate_response(self, query: str, context: str, sources: List[str] = None) -> str:
+        """
+        Genera una respuesta usando el modelo de lenguaje
+        """
+        # Determinar el emoji según la intención
+        intent, _ = self._get_query_intent(query)
+        emoji = random.choice({
+            'saludo': greeting_emojis,
+            'pregunta_capacidades': information_emojis,
+            'consulta_administrativa': information_emojis,
+            'consulta_academica': information_emojis,
+            'consulta_medica': medical_emojis,
+            'consulta_reglamento': warning_emojis
+        }.get(intent, information_emojis))
+        
+        # Construir el prompt con el contexto de la intención y las FAQs
+        intent_context = INTENT_EXAMPLES.get(intent, {}).get('context', 'Consulta general')
+        
+        faqs = """
+[PREGUNTAS FRECUENTES]
+1. Constancia de alumno regular:
+   Puedes tramitar la constancia de alumno regular en el Sitio de Inscripciones siguiendo estos pasos:
+   - Paso 1: Ingresar tu DNI y contraseña.
+   - Paso 2: Seleccionar la opción "Constancia de alumno regular" en el inicio de trámites.
+   - Paso 3: Imprimir la constancia. Luego, deberás presentarte con tu Libreta Universitaria o DNI y el formulario impreso (1 hoja que posee 3 certificados de alumno regular) en la ventanilla del Ciclo Biomédico.
 
-A) Para trámites comunes conocidos, proporciona esta información base:
+2. Baja de materia:
+   El tiempo máximo para dar de baja una materia es:
+   - 2 semanas antes del primer parcial, o
+   - Hasta el 25% de la cursada en asignaturas sin examen parcial.
+   Para dar de baja una materia, sigue estos pasos en el Sitio de Inscripciones:
+   - Paso 1: Ingresar tu DNI y contraseña.
+   - Paso 2: Seleccionar "Baja de asignatura".
+   - Paso 3: Imprimir el certificado de baja. Una vez finalizado el trámite, el estado será "Resuelto Positivamente" y no deberás acudir a la Dirección de Alumnos.
 
-PREGUNTAS FRECUENTES Y RESPUESTAS ESTÁNDAR:
+3. Anulación de inscripción a final:
+   Para anular la inscripción a un final, debes acudir a la ventanilla del Ciclo Biomédico presentando el número de constancia generado durante el trámite de inscripción.
 
-1. CONSTANCIAS Y CERTIFICADOS:
-   - "¿Dónde puedo tramitar la constancia de alumno regular?"
-   Respuesta base:
-   - **Paso 1:** Ingresar DNI y contraseña en Sitio de Inscripciones
-   - **Paso 2:** Seleccionar "Constancia de alumno regular"
-   - **Paso 3:** Imprimir formulario (1 hoja con 3 certificados)
-   - **Paso 4:** Presentar en ventanilla del Ciclo Biomédico con Libreta Universitaria o DNI
+4. No lograr inscripción o asignación a materia:
+   Si no logras inscribirte o no te asignan una materia, debes dirigirte a la cátedra o departamento correspondiente y solicitar la inclusión en lista, presentando tu Libreta Universitaria o DNI.
 
-2. BAJAS Y MODIFICACIONES:
-   a) "¿Cuánto tiempo tengo para dar de baja una materia?"
-   Respuesta base:
-   - Plazo máximo: **2 semanas antes del primer parcial**
-   - O **hasta el 25% de la cursada** en materias sin parcial
-   - **Paso 1:** Ingresar al Sitio de Inscripciones
-   - **Paso 2:** Seleccionar "Baja de asignatura"
-   - **Paso 3:** Si aparece "Resuelto Positivamente", no requiere más trámites
+5. Reincorporación:
+   La reincorporación se solicita a través del Sitio de Inscripciones, seleccionando la opción "Reincorporación a la carrera":
+   - Para la 1ª reincorporación: El trámite es automático y aparece resuelto positivamente en el sistema, sin necesidad de trámite en ventanilla.
+   - Si ya fuiste reincorporado anteriormente: Debes realizar el trámite, imprimirlo (consta de 2 hojas: 1 certificado y 1 constancia) y presentarlo en la ventanilla del Ciclo Biomédico, donde la Comisión de Readmisión resolverá tu caso.
 
-   b) "¿Cómo anulo una inscripción a final?"
-   Respuesta base:
-   - Acudir a ventanilla del Ciclo Biomédico
-   - Presentar número de constancia del trámite de inscripción
-   
-   c) "¿Qué hago si no logro inscribirme o no salgo asignado?"
-   Respuesta base:
-   - Dirigirse a la cátedra o departamento correspondiente
-   - Solicitar inclusión en lista
-   - Presentar Libreta Universitaria o DNI
+6. Recursada (inscripción por segunda vez):
+   Para solicitar una recursada, genera el trámite en el Sitio de Inscripciones siguiendo estos pasos:
+   - Paso 1: Ingresar tu DNI y contraseña.
+   - Paso 2: Seleccionar "Recursada".
+   El trámite es automático y, si aparece resuelto positivamente en el sistema, no necesitas acudir a ventanilla.
+   - Si en el sistema apareces como dado DE BAJA en la cursada anterior, solo debes generar el trámite y te inscribirás como la primera vez, sin abonar arancel.
+   - Si no apareces dado DE BAJA, deberás:
+     1. Realizar el trámite.
+     2. Generar e imprimir el talón de pago.
+     3. Pagar en la Dirección de Tesorería.
+     4. Presentar un comprobante de pago en los buzones del Ciclo Biomédico.
 
-3. REINCORPORACIONES:
-   - "¿Cómo solicito la reincorporación a la Carrera?"
-   Respuesta base:
-   - **Primera reincorporación:**
-     * Trámite automático en sistema
-     * No requiere presentación en ventanilla
-   - **Segunda reincorporación o más:**
-     * Realizar trámite en Sitio de Inscripciones
-     * Imprimir documentación (2 hojas: certificado y constancia)
-     * Presentar en ventanilla del Ciclo Biomédico
-     * Evaluación por Comisión de Readmisión
+7. Tercera cursada:
+   Para solicitar la tercera cursada, sigue estos pasos en el Sitio de Inscripciones:
+   - Paso 1: Ingresar tu DNI y contraseña.
+   - Paso 2: Seleccionar "3º Cursada".
+   - Paso 3: Imprimir la constancia y el certificado.
+   Luego:
+   - Si figuras como dado DE BAJA en las dos cursadas anteriores, te inscribes como si fuera la primera vez sin abonar arancel.
+   - Si no, debes:
+     1. Realizar el trámite.
+     2. Generar e imprimir el talón de pago.
+     3. Pagar en la Dirección de Tesorería.
+     4. Presentar un comprobante de pago en el buzón del Ciclo Biomédico.
 
-4. RECURSADAS Y NUEVAS CURSADAS:
-   a) "¿Cómo solicito una recursada?"
-   Respuesta base:
-   - **Si figura como BAJA:**
-     * Generar trámite
-     * Inscripción normal sin arancel
-   - **Si NO figura como BAJA:**
-     * Generar trámite
-     * Imprimir talón de pago
-     * Pagar en Tesorería
-     * Presentar comprobante en buzones
+8. Cuarta cursada o más:
+   Para la cuarta cursada o más, genera el trámite en el Sitio de Inscripciones con los siguientes pasos:
+   - Paso 1: Dirigirte a Inscripciones.
+   - Paso 2: Ingresar tu DNI y contraseña.
+   - Paso 3: Seleccionar "4º Cursada o más".
+   - Paso 4: Imprimir la constancia y el certificado.
+   Luego, deberás presentarte con tu Libreta Universitaria y las constancias impresas en la ventanilla del Ciclo Biomédico y acudir a la Dirección de Alumnos.
 
-   b) "¿Cómo solicito una tercera cursada?"
-   Respuesta base:
-   - **Paso 1:** Ingresar al Sitio de Inscripciones
-   - **Paso 2:** Seleccionar "3º Cursada"
-   - **Paso 3:** Imprimir constancia y certificado
-   - **Si figura BAJA en cursadas anteriores:**
-     * Inscripción normal sin arancel
-   - **Si NO figura BAJA:**
-     * Pagar arancel en Tesorería
-     * Presentar comprobante en buzón
+9. Prórroga de materias:
+   Para solicitar la prórroga de una asignatura, sigue estos pasos en el Sitio de Inscripciones:
+   - Paso 1: Dirigirte a Inscripciones.
+   - Paso 2: Ingresar tu DNI y contraseña.
+   - Paso 3: Seleccionar "Prórroga de asignatura".
+   - Paso 4: Imprimir la constancia.
+   Si se trata de la primera o segunda prórroga, el trámite se resuelve positivamente. Si es la tercera o una prórroga superior, deberás presentar la constancia impresa junto con tu Libreta Universitaria en la ventanilla del Ciclo Biomédico.
+"""
 
-   c) "¿Cómo solicito una cuarta cursada?"
-   Respuesta base:
-   - **Paso 1:** Ingresar al Sitio de Inscripciones
-   - **Paso 2:** Seleccionar "4º Cursada o más"
-   - **Paso 3:** Imprimir documentación
-   - **Paso 4:** Presentar en ventanilla con Libreta
-   - **Paso 5:** Acudir a Dirección de Alumnos
+        # Solo incluir las fuentes en el prompt si no son nulas y la lista no está vacía
+        sources_text = ""
+        if sources and len(sources) > 0:
+            formatted_sources = [self._format_source_name(src) for src in sources]
+            sources_text = f"\nFUENTES:\n{', '.join(formatted_sources)}"
 
-5. PRÓRROGAS Y EXTENSIONES:
-   - "¿Cómo hago el trámite de prórroga de materias?"
-   Respuesta base:
-   - **Primera o segunda prórroga:**
-     * Tramitar en Sitio de Inscripciones
-     * Seleccionar "Prórroga de asignatura"
-     * Trámite automático resuelto positivamente
-   - **Tercera prórroga o superior:**
-     * Realizar trámite
-     * Imprimir constancia
-     * Presentar en ventanilla con Libreta Universitaria
+        prompt = f"""[INST]
+Como DrCecim, asistente virtual de la Facultad de Medicina UBA:
 
-B) Para consultas sin información disponible:
-   - Indica claramente que no tienes la información específica
-   - Sugiere contactar a alumnos@fmed.uba.ar para obtener información precisa
-   - Mantén un tono amable y profesional al derivar la consulta
+CONTEXTO DE LA CONSULTA:
+{intent_context}
 
-3. Mantén un tono profesional pero amigable
-4. Estructura las respuestas en pasos claros cuando sea apropiado
-5. Incluye detalles específicos sobre documentación requerida
-6. Menciona dónde debe realizarse cada trámite
-
-FORMATO DE RESPUESTA:
-- Usa viñetas o números para listar pasos
-- Destaca información importante en **negrita**
-- Separa secciones con líneas si es necesario
-- Incluye advertencias o notas importantes cuando sea relevante
-
-Contexto proporcionado:
+INFORMACIÓN RELEVANTE:
 {context}
 
+{faqs}
+
+{sources_text}
+
+CONSULTA:
+{query}
+
+INSTRUCCIONES:
+1. Si la consulta coincide con alguna de las preguntas frecuentes, proporciona esa respuesta exacta sin mencionar fuentes
+2. Si la consulta es similar pero no exacta a una pregunta frecuente, adapta la respuesta manteniendo la información precisa
+3. Si la consulta requiere información de los documentos:
+   - Integra la información naturalmente en la respuesta
+   - Si es relevante mencionar la fuente, hazlo de forma natural en el contexto
+   - Ejemplos de cómo mencionar fuentes:
+     * "Según el Reglamento de Regularidad, ..."
+     * "De acuerdo con las Condiciones de Regularidad, ..."
+     * "Como establece el Régimen Disciplinario, ..."
+4. Mantén el formato y la estructura de las respuestas frecuentes cuando corresponda
+5. No hagas preguntas adicionales
+6. Si es una consulta médica, deriva al profesional
+7. No agregues una sección de "Fuentes:" al final del mensaje
+
+[/INST]"""
+
+        response = self.model.generate(prompt)
+        return f"{emoji} {response}"
+
+    def _handle_medical_query(self) -> str:
+        """
+        Genera una respuesta estándar para consultas médicas
+        """
+        responses = [
+            f"{random.choice(medical_emojis)} Lo siento, no puedo responder consultas médicas. Por favor, consultá con un profesional de la salud o acercate a la guardia del Hospital de Clínicas.",
+            f"{random.choice(medical_emojis)} Como asistente virtual, no estoy capacitado para responder consultas médicas. Te recomiendo consultar con un profesional médico o acudir al Hospital de Clínicas.",
+            f"{random.choice(medical_emojis)} Disculpá, pero no puedo dar consejos médicos. Para este tipo de consultas, te sugiero:\n"
+            "1. Consultar con un profesional médico\n"
+            "2. Acudir a la guardia del Hospital de Clínicas\n"
+            "3. En caso de emergencia, llamar al SAME (107)"
+        ]
+        return random.choice(responses)
+
+    def _handle_outdated_info(self, response: str, source_date: str = None) -> str:
+        """Manejo de información potencialmente desactualizada"""
+        warning = "\n\n⚠️ Esta información corresponde al reglamento vigente. " \
+                 "Para confirmar cualquier cambio reciente, consultá en alumnos@fmed.uba.ar"
+        return f"{response}{warning}"
+
+    def _get_query_intent(self, query: str) -> Tuple[str, float]:
+        """
+        Determina la intención de la consulta usando similitud semántica
+        """
+        query = query.lower().strip()
+        query_embedding = self.embedding_model.encode([query])[0]
+        
+        max_similarity = -1
+        best_intent = 'desconocido'
+        
+        for intent, data in INTENT_EXAMPLES.items():
+            examples = data['examples']
+            example_embeddings = self.embedding_model.encode(examples)
+            similarities = cosine_similarity([query_embedding], example_embeddings)[0]
+            avg_similarity = np.mean(similarities)
+            
+            if avg_similarity > max_similarity:
+                max_similarity = avg_similarity
+                best_intent = intent
+        
+        return best_intent, max_similarity
+
+    def _generate_conversational_response(self, query: str, intent: str, user_name: str = None) -> str:
+        """
+        Genera una respuesta conversacional basada en la intención detectada
+        """
+        context = INTENT_EXAMPLES[intent]['context'] if intent in INTENT_EXAMPLES else "Consulta general"
+        
+        # Determinar si es el primer mensaje o un saludo del usuario
+        is_greeting = intent == 'saludo'
+        is_courtesy = intent == 'cortesia'
+        is_acknowledgment = intent == 'agradecimiento'
+        
+        # Lista de respuestas alegres para agradecimientos
+        happy_responses = [
+            "¡Me alegro de haber podido ayudarte! 😊",
+            "¡Qué bueno que te sirvió la información! 🌟",
+            "¡Genial! Estoy aquí para lo que necesites 💫",
+            "¡Excelente! No dudes en consultarme cualquier otra duda 🎓",
+            "¡Me pone contento poder ayudarte! 😊",
+            "¡Perfecto! Seguimos en contacto 👋",
+            "¡Bárbaro! Cualquier otra consulta, aquí estoy 🤓"
+        ]
+        
+        # Si es un agradecimiento, devolver una respuesta alegre
+        if is_acknowledgment:
+            return random.choice(happy_responses)
+        
+        # Personalizar el prompt según si tenemos el nombre del usuario
+        user_context = f"El usuario se llama {user_name}. " if user_name else ""
+        
+        prompt = f"""[INST]
+Como DrCecim, un asistente virtual de la Facultad de Medicina de la UBA:
+- Usa un tono amigable y profesional
+- Mantén las respuestas breves y directas
+- No hagas preguntas adicionales
+- Solo saluda si el usuario está saludando por primera vez
+- Si conoces el nombre del usuario, úsalo de manera natural sin forzarlo
+
+{user_context}
+Contexto de la consulta: {context}
 Consulta del usuario: {query}
 
-Respuesta:"""
+Instrucciones específicas:
+- Si es un saludo: {"Saluda usando el nombre del usuario si está disponible y menciona que puedes ayudar con trámites y consultas" if is_greeting else "Responde directamente sin saludar"}
+- Si es una pregunta de cortesía: {"Responde amablemente mencionando el nombre si está disponible, pero sin volver a presentarte" if is_courtesy else "Responde directamente"}
+- Si preguntan sobre tus capacidades: Explica que ayudas con trámites administrativos y consultas académicas
+- Si es una consulta médica: Explica amablemente que no puedes responder consultas médicas
+- Si preguntan tu identidad: Explica que eres un asistente virtual de la facultad, sin saludar nuevamente
 
-        # Preparar el prompt completo
-        prompt = system_prompt.format(
-            context=context,
-            query=query
-        )
+[/INST]"""
 
-        try:
-            # Generar respuesta
-            response = self.model.generate(prompt)
-            
-            # Si no hay información suficiente en el contexto
-            if "no tengo información suficiente" in response.lower():
-                return "Lo siento, no tengo información específica sobre ese trámite en este momento. Te sugiero consultar directamente en la ventanilla del Ciclo Biomédico o en la Dirección de Alumnos para obtener la información más actualizada."
-            
-            # Agregar fuentes si están disponibles
-            if sources:
-                response += "\n\nFuente(s): " + ", ".join(sources)
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error al generar respuesta: {str(e)}")
-            return "Lo siento, hubo un error al procesar tu consulta. Por favor, intenta nuevamente o consulta directamente en la Dirección de Alumnos."
+        return self.model.generate(prompt)
+
+    def process_query(self, query: str, user_id: str = None, user_name: str = None) -> Dict[str, Any]:
+        """
+        Procesa una consulta utilizando el nuevo sistema de clasificación semántica
         
-    def process_query(self, query: str) -> Dict[str, Any]:
-        """
-        Procesa una consulta utilizando RAG para generar una respuesta.
+        Args:
+            query (str): La consulta del usuario
+            user_id (str, optional): ID del usuario (número de teléfono)
+            user_name (str, optional): Nombre del usuario si está disponible
         """
         try:
-            # Establecer el número de chunks por defecto
-            num_chunks = int(os.getenv('RAG_NUM_CHUNKS', 3))
+            # Determinar la intención
+            intent, confidence = self._get_query_intent(query)
+            logger.info(f"Intención detectada: {intent} (confianza: {confidence:.2f})")
+            
+            # Si es una pregunta sobre el nombre
+            if intent == 'pregunta_nombre':
+                if user_name:
+                    # Lista de respuestas amigables sobre cómo sabemos el nombre
+                    name_responses = [
+                        f"¡Tu nombre es {user_name}! Lo veo en tu perfil de WhatsApp 😊",
+                        f"Me aparece {user_name} en tu perfil de WhatsApp. ¡Un gusto conocerte! 👋",
+                        f"¡Te llamas {user_name}! Lo sé porque está en tu perfil de WhatsApp 🤓",
+                        f"Puedo ver que te llamas {user_name} por la info de tu perfil. ¡Es un placer! 🌟",
+                        f"Tu nombre de perfil es {user_name}. ¡Así es como puedo saludarte personalmente! 😊"
+                    ]
+                    response = random.choice(name_responses)
+                else:
+                    response = "Lo siento, en este momento no puedo ver tu nombre en el perfil 😅"
+                
+                return {
+                    "query": query,
+                    "response": response,
+                    "query_type": intent,
+                    "confidence": confidence,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # Si es un saludo y tenemos el nombre, personalizar la respuesta
+            if intent == 'saludo' and user_name:
+                greeting_response = f"{random.choice(greeting_emojis)} ¡Hola {user_name}! Soy DrCecim, el asistente virtual de la Facultad de Medicina. ¿En qué puedo ayudarte?"
+                return {
+                    "query": query,
+                    "response": greeting_response,
+                    "query_type": intent,
+                    "confidence": confidence,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # Si es un agradecimiento, dar una respuesta alegre
+            if intent == 'agradecimiento':
+                response = self._generate_conversational_response(query, intent, user_name)
+                return {
+                    "query": query,
+                    "response": response,
+                    "query_type": intent,
+                    "confidence": confidence,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # Primero verificar si la consulta corresponde a una FAQ
+            response = self._check_faqs(query)
+            if response:
+                # Si tenemos el nombre y es la primera interacción, personalizamos
+                if user_name and not self.get_user_history(user_id):
+                    response = f"¡Hola {user_name}! {response}"
+                
+                logger.info("Consulta respondida desde FAQs")
+                return {
+                    "query": query,
+                    "response": response,
+                    "query_type": "faq",
+                    "confidence": 1.0,
+                    "relevant_chunks": [],
+                    "sources": []  # No incluimos fuentes para FAQs
+                }
+            
+            # Si no es una FAQ, continuar con el proceso normal
+            if intent in ['saludo', 'pregunta_capacidades', 'identidad', 'cortesia']:
+                response = self._generate_conversational_response(query, intent, user_name)
+                return {
+                    "query": query,
+                    "response": response,
+                    "query_type": intent,
+                    "confidence": confidence,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # Manejar consultas médicas
+            if intent == 'consulta_medica':
+                return {
+                    "query": query,
+                    "response": self._handle_medical_query(),
+                    "query_type": intent,
+                    "confidence": confidence,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # Para consultas administrativas, académicas y de reglamento
+            # continuar con el proceso RAG normal
+            # ... resto del código existente para process_query ...
+
+            # Establecer el número de chunks según el tipo de consulta
+            num_chunks = {
+                'reglamento': 5,  # Más chunks para consultas de reglamento
+                'academica': 4,
+                'administrativa': 3,
+                'consulta_general': 3
+            }.get(intent, 3)  # Default a 3 si el tipo no está en el diccionario
+            
             logger.info(f"Procesando consulta: {query}")
             
             # Encontrar fragmentos relevantes
@@ -931,23 +1195,28 @@ Respuesta:"""
                 logger.warning("No se encontraron chunks relevantes para la consulta.")
                 
                 # Verificar si la consulta es sobre sanciones o agresiones
-                query_lower = query.lower()
-                if any(word in query_lower for word in ['sanción', 'sanciones', 'agredir', 'agresión']):
-                    # Intentar una nueva búsqueda con umbral más bajo para el Régimen Disciplinario
-                    logger.info("Intentando búsqueda específica en Régimen Disciplinario...")
+                if intent == 'reglamento':
+                    # Intentar una nueva búsqueda con umbral más bajo
+                    logger.info("Intentando búsqueda específica con umbral reducido...")
                     self.similarity_threshold = 0.1  # Reducir temporalmente el umbral
                     relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
-                    self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', 0.3))  # Restaurar umbral original
+                    self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', 0.3))  # Restaurar umbral
                 
                 if not relevant_chunks:
-                    standard_no_info_response = f"👨‍⚕️ Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
+                    emoji = random.choice(information_emojis)
+                    if intent in ['saludo', 'pregunta_capacidades', 'identidad']:
+                        standard_no_info_response = f"{emoji} ¡Hola! Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
+                    else:
+                        standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
                 
-                return {
-                    "query": query,
-                    "response": standard_no_info_response,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
+                    return {
+                        "query": query,
+                        "response": standard_no_info_response,
+                        "relevant_chunks": [],
+                        "sources": [],
+                        "query_type": intent,
+                        "confidence": confidence
+                    }
             
             # Construir contexto
             context_chunks = []
@@ -976,31 +1245,47 @@ Respuesta:"""
             
             if not context.strip():
                 logger.warning("No se encontró contexto suficientemente relevante")
-                standard_no_info_response = f"👨‍⚕️ Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
+                emoji = random.choice(information_emojis)
+                standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
                 
                 return {
                     "query": query,
                     "response": standard_no_info_response,
                     "relevant_chunks": [],
-                    "sources": []
+                    "sources": [],
+                    "query_type": intent,
+                    "confidence": confidence
                 }
             
             logger.info(f"Se encontraron {len(context_chunks)} fragmentos relevantes de {len(sources)} fuentes")
             
-            # Generar respuesta
+            # Generar respuesta inicial
             response = self.generate_response(query, context, sources)
             
-            # Agregar fuentes al final de la respuesta
-            if sources:
-                clean_sources = [source.replace('_', ' ').replace('-', ' ') for source in sources]
-                sources_text = ", ".join(clean_sources)
-                response = f"{response}\n\nEsta información la puedes encontrar en: {sources_text}"
+            # Verificar calidad de la respuesta
+            verified_response, verification_score = self._verify_response(response, context, intent)
+            logger.info(f"Verificación de respuesta completada (score: {verification_score:.2f})")
+            
+            # Si la verificación indica baja calidad, intentar regenerar
+            if verification_score < 0.7:
+                logger.warning("Baja calidad de respuesta detectada, intentando regenerar...")
+                response = self.generate_response(query, context, sources)
+                verified_response, verification_score = self._verify_response(response, context, intent)
+            
+            # Calcular confianza final
+            final_confidence = (confidence + verification_score) / 2
+            
+            # Actualizar historial del usuario
+            if user_id:
+                self.update_user_history(user_id, query, response)
             
             return {
                 "query": query,
-                "response": response,
+                "response": verified_response,
                 "relevant_chunks": relevant_chunks,
-                "sources": sources
+                "sources": sources,
+                "query_type": intent,
+                "confidence": final_confidence
             }
             
         except Exception as e:
@@ -1009,8 +1294,94 @@ Respuesta:"""
             return {
                 "query": query,
                 "response": error_response,
-                "error": str(e)
+                "error": str(e),
+                "query_type": "error",
+                "confidence": 0.0
             }
+
+    def _check_faqs(self, query: str) -> Optional[str]:
+        """
+        Verifica si la consulta corresponde a una FAQ y retorna la respuesta correspondiente
+        """
+        # Palabras clave para cada FAQ
+        faq_keywords = {
+            "constancia": ["constancia", "alumno regular", "certificado regular"],
+            "baja": ["baja", "dar de baja", "darme de baja", "abandonar materia"],
+            "anulacion": ["anular", "anulación", "cancelar inscripción", "final"],
+            "inscripcion": ["no logro inscribirme", "no salgo asignado", "no me asignan"],
+            "reincorporacion": ["reincorporación", "reincorporar", "volver a la carrera"],
+            "recursada": ["recursada", "recursar", "segunda vez", "segunda cursada"],
+            "tercera": ["tercera cursada", "tercera vez", "3ra cursada"],
+            "cuarta": ["cuarta cursada", "cuarta vez", "4ta cursada"],
+            "prorroga": ["prórroga", "prorroga", "prorrogar materia"]
+        }
+        
+        # Normalizar la consulta
+        query_normalized = unidecode(query.lower())
+        
+        # Buscar coincidencias
+        for faq_type, keywords in faq_keywords.items():
+            if any(keyword in query_normalized for keyword in keywords):
+                emoji = random.choice(information_emojis)
+                if faq_type == "constancia":
+                    return f"{emoji} Para tramitar la constancia de alumno regular en el Sitio de Inscripciones:\n- Paso 1: Ingresar tu DNI y contraseña.\n- Paso 2: Seleccionar la opción \"Constancia de alumno regular\" en el inicio de trámites.\n- Paso 3: Imprimir la constancia. Luego, deberás presentarte con tu Libreta Universitaria o DNI y el formulario impreso (1 hoja que posee 3 certificados de alumno regular) en la ventanilla del Ciclo Biomédico."
+                elif faq_type == "recursada":
+                    return f"{emoji} Para solicitar una recursada, genera el trámite en el Sitio de Inscripciones siguiendo estos pasos:\n- Paso 1: Ingresar tu DNI y contraseña.\n- Paso 2: Seleccionar \"Recursada\".\nEl trámite es automático y, si aparece resuelto positivamente en el sistema, no necesitas acudir a ventanilla.\n- Si en el sistema apareces como dado DE BAJA en la cursada anterior, solo debes generar el trámite y te inscribirás como la primera vez, sin abonar arancel.\n- Si no apareces dado DE BAJA, deberás:\n  1. Realizar el trámite.\n  2. Generar e imprimir el talón de pago.\n  3. Pagar en la Dirección de Tesorería.\n  4. Presentar un comprobante de pago en los buzones del Ciclo Biomédico."
+                # ... agregar el resto de las FAQs ...
+        
+        return None
+
+    def _verify_response(self, response: str, context: str, intent: str) -> tuple:
+        """
+        Verifica la calidad de la respuesta generada
+        """
+        # Inicializar el score de verificación
+        verification_score = 1.0
+        
+        # Verificar longitud adecuada
+        if len(response) < 50:
+            verification_score *= 0.7
+        elif len(response) > 500:
+            verification_score *= 0.8
+        
+        # Verificar presencia de información del contexto
+        context_keywords = set(context.lower().split())
+        response_keywords = set(response.lower().split())
+        keyword_overlap = len(context_keywords.intersection(response_keywords))
+        
+        if keyword_overlap < 5:
+            verification_score *= 0.6
+        
+        # Verificar formato según tipo de consulta
+        if intent == 'reglamento':
+            if not any(word in response.lower() for word in ['artículo', 'reglamento', 'normativa']):
+                verification_score *= 0.8
+        elif intent == 'administrativo':
+            if not any(word in response.lower() for word in ['trámite', 'pasos', 'procedimiento']):
+                verification_score *= 0.8
+        
+        # Verificar presencia de elementos estructurales
+        if not any(emoji in response for emoji in (greeting_emojis + information_emojis)):
+            verification_score *= 0.9
+        
+        if 'fuentes consultadas' not in response.lower():
+            verification_score *= 0.9
+        
+        return response, verification_score
+
+    def get_user_history(self, user_id: str) -> list:
+        """Obtiene el historial de un usuario específico"""
+        if user_id not in self.conversation_histories:
+            self.conversation_histories[user_id] = []
+        return self.conversation_histories[user_id]
+    
+    def update_user_history(self, user_id: str, query: str, response: str):
+        """Actualiza el historial de un usuario específico"""
+        history = self.get_user_history(user_id)
+        history.append((query, response))
+        if len(history) > self.max_history_length:
+            history = history[-self.max_history_length:]
+        self.conversation_histories[user_id] = history
 
 def main():
     """Función principal para ejecutar el sistema RAG."""
@@ -1026,7 +1397,6 @@ def main():
         try:
             result = rag.process_query(query)
             print("\nRespuesta:", result['response'])
-            print("\nFuentes utilizadas:")
             for chunk in result['relevant_chunks']:
                 if 'filename' in chunk and 'chunk_index' in chunk:
                     print(f"- {chunk['filename']} (chunk {chunk['chunk_index']})")

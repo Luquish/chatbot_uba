@@ -338,31 +338,16 @@ async def whatsapp_webhook(request: Request):
                 message_body = message.get("text", {}).get("body", "")
                 from_number = message.get("from", "")
                 message_id = message.get("id", "")
-                logger.info(f"Mensaje nuevo recibido - ID: {message_id}, De: {from_number}, Contenido: '{message_body}'")
                 
-                # Normalizar el número del remitente
-                whatsapp_handler = get_whatsapp_handler()
-                from_number = whatsapp_handler.normalize_phone_number(from_number)
+                # Obtener el nombre del perfil si está disponible
+                contacts = value.get("contacts", [])
+                profile_name = contacts[0].get("profile", {}).get("name", "") if contacts else ""
+                logger.info(f"Nombre del perfil: {profile_name}")
                 
-                # Generar respuesta usando RAG
-                try:
-                    result = rag_system.process_query(message_body)
-                    response_text = result["response"]
-                except Exception as e:
-                    logger.error(f"Error al procesar consulta RAG: {str(e)}")
-                    response_text = "Lo siento, tuve un problema procesando tu mensaje. Por favor, intenta de nuevo."
+                # Extraer ID del número de teléfono de negocio desde metadata
+                business_phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
                 
-                # Enviar respuesta
-                send_result = await whatsapp_handler.send_message(
-                    from_number,
-                    response_text
-                )
-                
-                return {
-                    "status": "success",
-                    "message": "Respuesta enviada",
-                    "details": send_result
-                }
+                logger.info(f"Webhook completo - De: {from_number}, Nombre: {profile_name}, Mensaje: '{message_body}'")
             elif "statuses" in value:
                 status = value.get("statuses", [])[0]
                 status_type = status.get("status")
@@ -645,10 +630,15 @@ async def receive_whatsapp_message(request: Request):
                     message_body = message.get("text", {}).get("body", "")
                     from_number = message.get("from", "")
                     
+                    # Obtener el nombre del perfil si está disponible
+                    contacts = value.get("contacts", [])
+                    profile_name = contacts[0].get("profile", {}).get("name", "") if contacts else ""
+                    logger.info(f"Nombre del perfil: {profile_name}")
+                    
                     # Extraer ID del número de teléfono de negocio desde metadata
                     business_phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
                     
-                    logger.info(f"Webhook completo - De: {from_number}, Mensaje: '{message_body}'")
+                    logger.info(f"Webhook completo - De: {from_number}, Nombre: {profile_name}, Mensaje: '{message_body}'")
                 else:
                     # Puede ser un mensaje de estado (read, delivered, etc)
                     logger.debug("Evento de estado recibido, no es un mensaje de texto")
@@ -682,7 +672,11 @@ async def receive_whatsapp_message(request: Request):
         # Procesar el mensaje usando RAG
         try:
             logger.info(f"Procesando mensaje con RAG: '{message_body}'")
-            result = rag_system.process_query(message_body)
+            result = rag_system.process_query(
+                message_body, 
+                user_id=from_number,
+                user_name=profile_name if profile_name else None
+            )
             response_text = result["response"]
             logger.info(f"Respuesta RAG generada: {response_text}")
         except Exception as e:

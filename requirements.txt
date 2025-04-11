@@ -23,6 +23,7 @@ tqdm>=4.66.1
 numpy>=1.24.3
 pandas>=2.1.4
 scikit-learn>=1.3.2
+unidecode>=1.3.8
 
 # Testing y desarrollo
 pytest>=7.4.3
