@@ -113,9 +113,24 @@ INTENT_EXAMPLES = {
             "cuántas materias debo aprobar",
             "en cuánto tiempo tengo que terminar la carrera",
             "cómo se define el año académico",
-            "qué derechos tengo para inscribirme"
+            "qué derechos tengo para inscribirme",
+            # Nuevos ejemplos sobre denuncias y trámites administrativos
+            "cómo presento una denuncia",
+            "qué tengo que hacer para presentar una denuncia",
+            "dónde puedo hacer una queja formal",
+            "procedimiento para reportar un problema",
+            "cómo puedo denunciar una situación irregular",
+            "pasos para hacer una denuncia",
+            "dónde se presentan las quejas",
+            "quiero denunciar a alguien, qué hago",
+            "cómo inicio un reclamo formal",
+            "quiero reportar una irregularidad",
+            "cómo suspender temporalmente mi condición de alumno",
+            "puedo pedir suspensión de mis estudios",
+            "qué pasa si pierdo la regularidad",
+            "cómo solicito readmisión"
         ],
-        'context': "El usuario necesita información sobre trámites administrativos o condiciones de regularidad"
+        'context': "El usuario necesita información sobre trámites administrativos, condiciones de regularidad o procedimientos formales"
     },
     'consulta_academica': {
         'examples': [
@@ -124,9 +139,20 @@ INTENT_EXAMPLES = {
             "cómo es la cursada",
             "qué necesito para aprobar",
             "cómo se evalúa la calidad de enseñanza",
-            "qué materias puedo cursar"
+            "qué materias puedo cursar",
+            # Nuevos ejemplos relacionados con cuestiones académicas
+            "cuántas materias tengo que aprobar para mantener regularidad",
+            "qué pasa si tengo muchos aplazos",
+            "cuántos aplazos puedo tener como máximo",
+            "cuál es el porcentaje máximo de aplazos permitido",
+            "en cuánto tiempo tengo que terminar la carrera",
+            "plazo máximo para completar mis estudios",
+            "cómo saber si soy alumno regular",
+            "qué derechos tengo como alumno",
+            "qué pasa si no apruebo suficientes materias",
+            "cómo puedo cursar materias en otra facultad"
         ],
-        'context': "El usuario necesita información académica"
+        'context': "El usuario necesita información académica sobre cursada, evaluación y aprobación"
     },
     'consulta_medica': {
         'examples': [
@@ -151,7 +177,23 @@ INTENT_EXAMPLES = {
             "qué sanciones aplican",
             "si cometo una falta",
             "quién evalúa mi comportamiento",
-            "qué pasa si rompo las reglas"
+            "qué pasa si rompo las reglas",
+            # Nuevos ejemplos relacionados con el régimen disciplinario
+            "qué sanciones hay si agredo a un profesor",
+            "qué pasa si me comporto mal en la facultad",
+            "cuáles son las sanciones disciplinarias",
+            "quién puede denunciar una falta disciplinaria",
+            "cómo es el proceso de un sumario disciplinario",
+            "qué pasa si me suspenden preventivamente",
+            "puedo apelar una sanción",
+            "por cuánto tiempo pueden suspenderme",
+            "qué pasa si falsifiqué un documento",
+            "qué sucede si agravo a otro estudiante",
+            "cuánto dura la suspensión por falta de respeto",
+            "qué es un apercibimiento",
+            "puedo estudiar en otra facultad si me suspenden",
+            "cómo se presenta una denuncia por conducta inapropiada",
+            "qué ocurre si adulteré un acta de examen"
         ],
         'context': "El usuario pregunta sobre normativas, reglamentos y medidas disciplinarias"
     },
@@ -194,6 +236,14 @@ QUERY_EXPANSIONS = {
     'recursada': ['recursar', 'volver a cursar', 'segunda vez'],
     'correlativa': ['correlatividad', 'requisito', 'necesito', 'puedo cursar'],
     'baja': ['dar de baja', 'abandonar', 'dejar', 'salir'],
+    # Nuevas expansiones
+    'denuncia': ['denuncia', 'queja', 'reclamo', 'reportar', 'irregularidad', 'problema', 'presentar', 'acusar'],
+    'procedimiento': ['procedimiento', 'proceso', 'pasos', 'cómo', 'manera', 'forma', 'metodología', 'trámite'],
+    'sancion': ['sanción', 'sanciones', 'castigo', 'penalidad', 'disciplina', 'apercibimiento', 'suspensión'],
+    'sumario': ['sumario', 'investigación', 'proceso disciplinario', 'expediente'],
+    'readmision': ['readmisión', 'readmitir', 'volver', 'reincorporación', 'reintegro'],
+    'aprobacion': ['aprobar', 'aprobación', 'pasar materias', 'materias aprobadas', 'requisitos'],
+    'suspension': ['suspensión', 'suspender', 'interrumpir', 'detener estudios', 'temporalmente']
 }
 
 # Configurar logging
@@ -653,7 +703,7 @@ class RAGSystem:
             raise RuntimeError(f"No se pudo inicializar ningún modelo (local ni API): {str(e)}")
         
         # Cargar modelo de embeddings
-        embedding_model_name = os.getenv('EMBEDDING_MODEL_NAME', 'hiiamsid/sentence_similarity_spanish_es')
+        embedding_model_name = os.getenv('EMBEDDING_MODEL_NAME', 'intfloat/multilingual-e5-large-instruct')
         try:
             logger.info(f"Intentando cargar modelo de embeddings: {embedding_model_name}")
             self.embedding_model = SentenceTransformer(embedding_model_name)
@@ -669,7 +719,7 @@ class RAGSystem:
         self.vector_store = self._initialize_vector_store()
 
         # Configurar umbral de similitud
-        self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', '0.1'))  # Umbral más permisivo
+        self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', '0.1'))
 
     def _load_local_model(self, model_path: str):
         """Carga el modelo local con la configuración apropiada"""
@@ -787,8 +837,13 @@ class RAGSystem:
             expanded_query = self._expand_query(query)
             logger.info(f"Consulta expandida: {expanded_query}")
             
+            # Formato específico para modelo E5: Instruct + Query
+            task_description = "Recuperar información relevante sobre procedimientos y reglamentos administrativos universitarios"
+            formatted_query = f"Instruct: {task_description}\nQuery: {expanded_query}"
+            logger.info(f"Consulta formateada para E5: {formatted_query}")
+            
             query_embedding = self.embedding_model.encode(
-                [expanded_query],
+                [formatted_query],
                 convert_to_numpy=True,
                 normalize_embeddings=True
             )[0]
@@ -885,7 +940,7 @@ class RAGSystem:
 
     def generate_response(self, query: str, context: str, sources: List[str] = None) -> str:
         """
-        Genera una respuesta usando el modelo de lenguaje
+        Genera una respuesta usando el modelo de lenguaje con el prompt mejorado
         """
         # Determinar el emoji según la intención
         intent, _ = self._get_query_intent(query)
@@ -975,39 +1030,47 @@ class RAGSystem:
         sources_text = ""
         if sources and len(sources) > 0:
             formatted_sources = [self._format_source_name(src) for src in sources]
-            sources_text = f"\nFUENTES:\n{', '.join(formatted_sources)}"
+            sources_text = f"\nFUENTES CONSULTADAS:\n{', '.join(formatted_sources)}"
 
+        # Prompt mejorado siguiendo las mejores prácticas para Mistral-7B-Instruct-v0.3
         prompt = f"""[INST]
-Como DrCecim, asistente virtual de la Facultad de Medicina UBA:
+Como DrCecim, asistente virtual especializado de la Facultad de Medicina UBA:
 
 CONTEXTO DE LA CONSULTA:
 {intent_context}
 
-INFORMACIÓN RELEVANTE:
+INFORMACIÓN RELEVANTE RECUPERADA DE DOCUMENTOS OFICIALES:
 {context}
 
+PREGUNTAS FRECUENTES DE REFERENCIA:
 {faqs}
 
 {sources_text}
 
-CONSULTA:
+CONSULTA DEL USUARIO:
 {query}
 
-INSTRUCCIONES:
-1. Si la consulta coincide con alguna de las preguntas frecuentes, proporciona esa respuesta exacta sin mencionar fuentes
-2. Si la consulta es similar pero no exacta a una pregunta frecuente, adapta la respuesta manteniendo la información precisa
-3. Si la consulta requiere información de los documentos:
-   - Integra la información naturalmente en la respuesta
-   - Si es relevante mencionar la fuente, hazlo de forma natural en el contexto
-   - Ejemplos de cómo mencionar fuentes:
-     * "Según el Reglamento de Regularidad, ..."
-     * "De acuerdo con las Condiciones de Regularidad, ..."
-     * "Como establece el Régimen Disciplinario, ..."
-4. Mantén el formato y la estructura de las respuestas frecuentes cuando corresponda
-5. No hagas preguntas adicionales
-6. Si es una consulta médica, deriva al profesional
-7. No agregues una sección de "Fuentes:" al final del mensaje
+INSTRUCCIONES PARA RESPONDER:
+1. PRIORIDAD MÁXIMA: Si encuentras información relevante en la sección "INFORMACIÓN RELEVANTE", úsala como base principal para tu respuesta. Esta información proviene de documentos oficiales y es la más autorizada.
 
+2. Si la consulta coincide con alguna pregunta frecuente y no hay información relevante en los documentos, proporciona la respuesta de las FAQ.
+
+3. Cuando uses información de los documentos oficiales, menciona naturalmente la fuente en el contexto de tu respuesta:
+   * "Según el reglamento vigente, ..."
+   * "De acuerdo con la normativa universitaria, ..."
+   * "La normativa establece que ..."
+
+4. Si la información disponible es parcial o incompleta, proporciona lo que sabes y sugiere dónde obtener información adicional (ej. Departamento de Alumnos, Secretaría Académica).
+
+5. Mantén un tono institucional pero amigable. Estructura tu respuesta de forma clara usando viñetas o numeración cuando sea apropiado.
+
+6. No agregues información que no esté en las fuentes proporcionadas.
+
+7. No hagas preguntas adicionales al usuario.
+
+8. Si es una consulta médica, deriva al profesional.
+
+9. Incluye el emoji correspondiente al inicio de la respuesta.
 [/INST]"""
 
         response = self.model.generate(prompt)
@@ -1222,6 +1285,15 @@ INSTRUCCIONES:
             intent, confidence = self._get_query_intent(query)
             logger.info(f"Intención detectada: {intent} (confianza: {confidence:.2f})")
             
+            # Nuevo: Mecanismo de fallback para confianza moderada
+            confidence_threshold = 0.90  # Umbral ajustable
+            should_try_rag = False
+            
+            # Verificar si la confianza es baja y no es una intención conversacional básica
+            if confidence < confidence_threshold and intent not in ['saludo', 'cortesia', 'agradecimiento', 'referencia_anterior', 'pregunta_nombre']:
+                logger.info(f"Confianza moderada ({confidence:.2f}), intentando RAG como fallback")
+                should_try_rag = True
+                
             # Si es una referencia a un mensaje anterior
             if intent == 'referencia_anterior':
                 if not user_id or not self.get_user_history(user_id):
@@ -1292,7 +1364,7 @@ INSTRUCCIONES:
             
             # Primero verificar si la consulta corresponde a una FAQ
             response = self._check_faqs(query)
-            if response:
+            if response and not should_try_rag:
                 # Si tenemos el nombre y es la primera interacción, personalizamos
                 if user_name and not self.get_user_history(user_id):
                     response = f"¡Hola {user_name}! {response}"
@@ -1307,8 +1379,130 @@ INSTRUCCIONES:
                     "sources": []  # No incluimos fuentes para FAQs
                 }
             
-            # Si no es una FAQ, continuar con el proceso normal
-            if intent in ['saludo', 'pregunta_capacidades', 'identidad', 'cortesia']:
+            # Si no es una FAQ, o should_try_rag es True, continuar con el proceso normal
+            # Modificación: cambiar la condición para incluir should_try_rag
+            if should_try_rag or intent not in ['saludo', 'pregunta_capacidades', 'identidad', 'cortesia']:
+                # Establecer el número de chunks según el tipo de consulta
+                num_chunks = {
+                    'consulta_reglamento': 5,  # Más chunks para consultas de reglamento
+                    'consulta_academica': 4,
+                    'consulta_administrativa': 3,
+                    'consulta_general': 3
+                }.get(intent, 3)  # Default a 3 si el tipo no está en el diccionario
+                
+                logger.info(f"Procesando consulta RAG: {query}")
+                
+                # Encontrar fragmentos relevantes
+                relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
+                
+                # Verificar si se encontraron chunks relevantes
+                if not relevant_chunks:
+                    logger.warning("No se encontraron chunks relevantes para la consulta.")
+                    
+                    # Verificar si la consulta es sobre sanciones o agresiones
+                    if intent == 'consulta_reglamento' or 'denuncia' in query.lower() or 'sancion' in query.lower():
+                        # Intentar una nueva búsqueda con umbral más bajo
+                        logger.info("Intentando búsqueda específica con umbral reducido...")
+                        self.similarity_threshold = 0.1  # Reducir temporalmente el umbral
+                        relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
+                        self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', 0.3))  # Restaurar umbral
+                    
+                    if not relevant_chunks:
+                        # Si aún no hay chunks relevantes, intentar responder conversacionalmente
+                        if intent in ['saludo', 'pregunta_capacidades', 'identidad']:
+                            response = self._generate_conversational_response(query, intent, user_name)
+                            return {
+                                "query": query,
+                                "response": response,
+                                "query_type": intent,
+                                "confidence": confidence,
+                                "relevant_chunks": [],
+                                "sources": []
+                            }
+                        else:
+                            emoji = random.choice(information_emojis)
+                            standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
+                        
+                            return {
+                                "query": query,
+                                "response": standard_no_info_response,
+                                "relevant_chunks": [],
+                                "sources": [],
+                                "query_type": intent,
+                                "confidence": confidence
+                            }
+                
+                # Construir contexto
+                context_chunks = []
+                sources = []
+                
+                for chunk in relevant_chunks:
+                    if "content" in chunk and chunk["content"].strip():
+                        content = chunk["content"]
+                    elif "text" in chunk and chunk["text"].strip():
+                        content = chunk["text"]
+                    else:
+                        continue
+                    
+                    source = ""
+                    if "filename" in chunk and chunk["filename"]:
+                        source = os.path.basename(chunk["filename"]).replace('.pdf', '')
+                        if source and source not in sources:
+                            sources.append(source)
+                    
+                    formatted_chunk = f"Información de {source}:\n{content}"
+                    context_chunks.append(formatted_chunk)
+                    logger.info(f"Agregado chunk relevante de {source}")
+                
+                # Unir los chunks para formar el contexto
+                context = '\n\n'.join(context_chunks)
+                
+                if not context.strip():
+                    logger.warning("No se encontró contexto suficientemente relevante")
+                    emoji = random.choice(information_emojis)
+                    standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
+                    
+                    return {
+                        "query": query,
+                        "response": standard_no_info_response,
+                        "relevant_chunks": [],
+                        "sources": [],
+                        "query_type": intent,
+                        "confidence": confidence
+                    }
+                
+                logger.info(f"Se encontraron {len(context_chunks)} fragmentos relevantes de {len(sources)} fuentes")
+                
+                # Generar respuesta inicial
+                response = self.generate_response(query, context, sources)
+                
+                # Verificar calidad de la respuesta
+                verified_response, verification_score = self._verify_response(response, context, intent)
+                logger.info(f"Verificación de respuesta completada (score: {verification_score:.2f})")
+                
+                # Si la verificación indica baja calidad, intentar regenerar
+                if verification_score < 0.7:
+                    logger.warning("Baja calidad de respuesta detectada, intentando regenerar...")
+                    response = self.generate_response(query, context, sources)
+                    verified_response, verification_score = self._verify_response(response, context, intent)
+                
+                # Calcular confianza final
+                final_confidence = (confidence + verification_score) / 2
+                
+                # Actualizar historial del usuario
+                if user_id:
+                    self.update_user_history(user_id, query, response)
+                
+                return {
+                    "query": query,
+                    "response": verified_response,
+                    "relevant_chunks": relevant_chunks,
+                    "sources": sources,
+                    "query_type": intent,
+                    "confidence": final_confidence
+                }
+            else:
+                # Para intenciones conversacionales (saludo, pregunta_capacidades, identidad, cortesia)
                 response = self._generate_conversational_response(query, intent, user_name)
                 return {
                     "query": query,
@@ -1329,122 +1523,7 @@ INSTRUCCIONES:
                     "relevant_chunks": [],
                     "sources": []
                 }
-            
-            # Para consultas administrativas, académicas y de reglamento
-            # continuar con el proceso RAG normal
-            # ... resto del código existente para process_query ...
-
-            # Establecer el número de chunks según el tipo de consulta
-            num_chunks = {
-                'reglamento': 5,  # Más chunks para consultas de reglamento
-                'academica': 4,
-                'administrativa': 3,
-                'consulta_general': 3
-            }.get(intent, 3)  # Default a 3 si el tipo no está en el diccionario
-            
-            logger.info(f"Procesando consulta: {query}")
-            
-            # Encontrar fragmentos relevantes
-            relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
-            
-            # Verificar si se encontraron chunks relevantes
-            if not relevant_chunks:
-                logger.warning("No se encontraron chunks relevantes para la consulta.")
                 
-                # Verificar si la consulta es sobre sanciones o agresiones
-                if intent == 'reglamento':
-                    # Intentar una nueva búsqueda con umbral más bajo
-                    logger.info("Intentando búsqueda específica con umbral reducido...")
-                    self.similarity_threshold = 0.1  # Reducir temporalmente el umbral
-                    relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
-                    self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', 0.3))  # Restaurar umbral
-                
-                if not relevant_chunks:
-                    emoji = random.choice(information_emojis)
-                    if intent in ['saludo', 'pregunta_capacidades', 'identidad']:
-                        standard_no_info_response = f"{emoji} ¡Hola! Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
-                    else:
-                        standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
-                
-                    return {
-                        "query": query,
-                        "response": standard_no_info_response,
-                        "relevant_chunks": [],
-                        "sources": [],
-                        "query_type": intent,
-                        "confidence": confidence
-                    }
-            
-            # Construir contexto
-            context_chunks = []
-            sources = []
-            
-            for chunk in relevant_chunks:
-                if "content" in chunk and chunk["content"].strip():
-                    content = chunk["content"]
-                elif "text" in chunk and chunk["text"].strip():
-                    content = chunk["text"]
-                else:
-                    continue
-                
-                source = ""
-                if "filename" in chunk and chunk["filename"]:
-                    source = os.path.basename(chunk["filename"]).replace('.pdf', '')
-                    if source and source not in sources:
-                        sources.append(source)
-                
-                formatted_chunk = f"Información de {source}:\n{content}"
-                context_chunks.append(formatted_chunk)
-                logger.info(f"Agregado chunk relevante de {source}")
-            
-            # Unir los chunks para formar el contexto
-            context = '\n\n'.join(context_chunks)
-            
-            if not context.strip():
-                logger.warning("No se encontró contexto suficientemente relevante")
-                emoji = random.choice(information_emojis)
-                standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
-                
-                return {
-                    "query": query,
-                    "response": standard_no_info_response,
-                    "relevant_chunks": [],
-                    "sources": [],
-                    "query_type": intent,
-                    "confidence": confidence
-                }
-            
-            logger.info(f"Se encontraron {len(context_chunks)} fragmentos relevantes de {len(sources)} fuentes")
-            
-            # Generar respuesta inicial
-            response = self.generate_response(query, context, sources)
-            
-            # Verificar calidad de la respuesta
-            verified_response, verification_score = self._verify_response(response, context, intent)
-            logger.info(f"Verificación de respuesta completada (score: {verification_score:.2f})")
-            
-            # Si la verificación indica baja calidad, intentar regenerar
-            if verification_score < 0.7:
-                logger.warning("Baja calidad de respuesta detectada, intentando regenerar...")
-                response = self.generate_response(query, context, sources)
-                verified_response, verification_score = self._verify_response(response, context, intent)
-            
-            # Calcular confianza final
-            final_confidence = (confidence + verification_score) / 2
-            
-            # Actualizar historial del usuario
-            if user_id:
-                self.update_user_history(user_id, query, response)
-            
-            return {
-                "query": query,
-                "response": verified_response,
-                "relevant_chunks": relevant_chunks,
-                "sources": sources,
-                "query_type": intent,
-                "confidence": final_confidence
-            }
-            
         except Exception as e:
             logger.error(f"Error en process_query: {str(e)}", exc_info=True)
             error_response = f"👨‍⚕️ Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
@@ -1490,7 +1569,7 @@ INSTRUCCIONES:
 
     def _verify_response(self, response: str, context: str, intent: str) -> tuple:
         """
-        Verifica la calidad de la respuesta generada
+        Verifica la calidad de la respuesta generada con criterios mejorados
         """
         # Inicializar el score de verificación
         verification_score = 1.0
@@ -1510,18 +1589,19 @@ INSTRUCCIONES:
             verification_score *= 0.6
         
         # Verificar formato según tipo de consulta
-        if intent == 'reglamento':
-            if not any(word in response.lower() for word in ['artículo', 'reglamento', 'normativa']):
+        if intent == 'consulta_reglamento':
+            if not any(word in response.lower() for word in ['artículo', 'reglamento', 'normativa', 'sanción', 'según', 'establece']):
                 verification_score *= 0.8
-        elif intent == 'administrativo':
-            if not any(word in response.lower() for word in ['trámite', 'pasos', 'procedimiento']):
+        elif intent == 'consulta_administrativa':
+            if not any(word in response.lower() for word in ['trámite', 'pasos', 'procedimiento', 'debes', 'podrás', 'deberás']):
                 verification_score *= 0.8
+            
+            # Nuevo: Verificar si hay términos específicos para denuncias
+            if "denuncia" in context.lower() and not any(word in response.lower() for word in ['denuncia', 'reportar', 'presentar', 'escrito']):
+                verification_score *= 0.7
         
         # Verificar presencia de elementos estructurales
         if not any(emoji in response for emoji in (greeting_emojis + information_emojis)):
-            verification_score *= 0.9
-        
-        if 'fuentes consultadas' not in response.lower():
             verification_score *= 0.9
         
         return response, verification_score

@@ -113,83 +113,234 @@ class DocumentPreprocessor:
 
     def convert_to_markdown(self, text: str) -> str:
         """
-        Convierte el texto extraído del PDF a formato Markdown.
+        Convierte el texto extraído del PDF a formato Markdown mejorado para resoluciones universitarias.
         
         Args:
             text (str): Texto extraído del PDF
             
         Returns:
-            str: Texto en formato Markdown
+            str: Texto en formato Markdown enriquecido
         """
         if not text:
             return ""
         
-        # Patrones para identificar estructura
-        title_pattern = re.compile(r'^[A-Z][A-Z\s]{10,}(?:\n|$)')
+        # Patrones para identificar estructura específica de resoluciones universitarias
+        title_pattern = re.compile(r'^([A-Z][A-Z\s]{5,})(?:\n|$)')
+        resolution_pattern = re.compile(r'Resolución\s+(?:\([A-Z]+\))?\s*(\d+\/\d+)')
         article_pattern = re.compile(r'^Art(?:ículo|\.)\s*(\d+\º?)\.?', re.IGNORECASE)
         section_pattern = re.compile(r'^(?:CAPÍTULO|TÍTULO|SECCIÓN)\s+([IVX\d]+)\.?', re.IGNORECASE)
         subsection_pattern = re.compile(r'^(?:[a-z]\)|[0-9]+\.|[A-Z]\))', re.IGNORECASE)
+        visto_pattern = re.compile(r'^\s*Visto', re.IGNORECASE)
+        considerando_pattern = re.compile(r'^\s*Considerando:', re.IGNORECASE)
+        resuelve_pattern = re.compile(r'^\s*(?:El\s+Consejo\s+Superior.*?\n\s*)?Resuelve:', re.IGNORECASE)
+        anexo_pattern = re.compile(r'^\s*Anexo\s*$', re.IGNORECASE)
+        inciso_pattern = re.compile(r'^\s*([a-z]\))', re.IGNORECASE)
         
-        # Dividir el texto en párrafos
-        paragraphs = text.split('\n\n')
+        # Separar el texto en líneas para procesamiento
+        lines = text.split('\n')
         markdown_lines = []
         in_list = False
+        title_found = False
+        resolution_found = False
+        visto_found = False
+        considerando_found = False
+        resuelve_found = False
+        anexo_found = False
+        rector_line = False
         
-        for paragraph in paragraphs:
-            lines = paragraph.split('\n')
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    markdown_lines.append('')
-                    continue
-                
-                # Títulos principales
-                if title_pattern.match(line):
-                    if markdown_lines and markdown_lines[-1] != '':
-                        markdown_lines.append('')
-                    markdown_lines.append(f"# {line}")
-                    markdown_lines.append('')
-                    continue
-                
-                # Secciones
-                section_match = section_pattern.match(line)
-                if section_match:
-                    if markdown_lines and markdown_lines[-1] != '':
-                        markdown_lines.append('')
-                    markdown_lines.append(f"## {line}")
-                    markdown_lines.append('')
-                    continue
-                
-                # Artículos
-                article_match = article_pattern.match(line)
-                if article_match:
-                    if markdown_lines and markdown_lines[-1] != '':
-                        markdown_lines.append('')
-                    markdown_lines.append(f"### {line}")
-                    markdown_lines.append('')
-                    continue
-                
-                # Subsecciones y listas
-                subsection_match = subsection_pattern.match(line)
-                if subsection_match:
-                    if not in_list:
-                        if markdown_lines and markdown_lines[-1] != '':
-                            markdown_lines.append('')
-                        in_list = True
-                    markdown_lines.append(f"- {line}")
-                    continue
-                
-                # Texto normal
-                if in_list and not subsection_match:
-                    in_list = False
-                    markdown_lines.append('')
-                markdown_lines.append(line)
+        # Procesar línea por línea
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
             
-            # Agregar línea en blanco entre párrafos
-            if markdown_lines and markdown_lines[-1] != '':
-                markdown_lines.append('')
+            # Saltar líneas vacías al inicio
+            if not line and not title_found:
+                i += 1
+                continue
+            
+            # Detectar título principal
+            if not title_found and title_pattern.match(line):
+                markdown_lines.append(f"# {line}")
+                title_found = True
+                i += 1
+                continue
+            
+            # Detectar número de resolución
+            if title_found and not resolution_found and resolution_pattern.search(line):
+                markdown_lines.append(f"**{line}**")
+                resolution_found = True
+                i += 1
+                continue
+            
+            # Detectar sección "Visto"
+            if resolution_found and not visto_found and visto_pattern.match(line):
+                markdown_lines.append("\n_Visto_:")
+                
+                # Capturar todo el texto de "Visto" hasta "Considerando" o "Resuelve"
+                visto_text = []
+                j = i
+                while j < len(lines) and not considerando_pattern.match(lines[j]) and not resuelve_pattern.match(lines[j]):
+                    if lines[j].strip() and not visto_pattern.match(lines[j]):
+                        visto_text.append(lines[j].strip())
+                    j += 1
+                
+                # Formatear el texto "Visto" como lista si es apropiado
+                if any(re.match(r'^-|\d+\)|\([a-z]\)', line) for line in visto_text):
+                    for vt in visto_text:
+                        if re.match(r'^-', vt):
+                            markdown_lines.append(f"- {vt[1:].strip()}")
+                        elif re.match(r'^\d+\)|\([a-z]\)', vt):
+                            markdown_lines.append(f"- {vt}")
+                        else:
+                            markdown_lines.append(f"- {vt}")
+                else:
+                    markdown_lines.append(" ".join(visto_text))
+                
+                markdown_lines.append("\n---\n")
+                visto_found = True
+                i = j
+                continue
+            
+            # Detectar sección "Considerando"
+            if (resolution_found or visto_found) and not considerando_found and considerando_pattern.match(line):
+                markdown_lines.append("**Considerando:**\n")
+                
+                # Capturar todo el considerando hasta "Resuelve"
+                considerando_text = []
+                j = i + 1
+                while j < len(lines) and not resuelve_pattern.match(lines[j]):
+                    if lines[j].strip() and not "El Consejo Superior" in lines[j]:
+                        # Verificar si es un "Que" inicial para formato de lista
+                        if lines[j].strip().startswith("Que") or lines[j].strip().startswith("que"):
+                            considerando_text.append(f"- {lines[j].strip()}")
+                        else:
+                            considerando_text.append(lines[j].strip())
+                    j += 1
+                
+                # Formatear el considerando como texto normal o lista según corresponda
+                for ct in considerando_text:
+                    markdown_lines.append(ct)
+                
+                considerando_found = True
+                i = j - 1  # Retroceder uno para que el próximo ciclo capture "Resuelve"
+                i += 1
+                continue
+            
+            # Detectar línea "El Consejo Superior" antes de Resuelve
+            if not resuelve_found and "El Consejo Superior" in line:
+                markdown_lines.append(f"\n**{line}**\n")
+                i += 1
+                continue
+            
+            # Detectar sección "Resuelve"
+            if (visto_found or considerando_found or resolution_found) and not resuelve_found and resuelve_pattern.match(line):
+                markdown_lines.append("\n---\n")
+                markdown_lines.append("## Resuelve:\n")
+                resuelve_found = True
+                i += 1
+                continue
+            
+            # Detectar sección "Anexo"
+            if not anexo_found and anexo_pattern.match(line):
+                markdown_lines.append("\n---\n")
+                markdown_lines.append("## Anexo\n")
+                anexo_found = True
+                i += 1
+                continue
+            
+            # Detectar artículos
+            article_match = article_pattern.match(line)
+            if article_match:
+                # Terminar lista anterior si existía
+                if in_list:
+                    in_list = False
+                    markdown_lines.append("")
+                
+                # Agregar artículo con formato
+                markdown_lines.append(f"### {line}")
+                
+                # Capturar todo el contenido del artículo hasta el próximo artículo
+                j = i + 1
+                article_content = []
+                while j < len(lines) and not article_pattern.match(lines[j].strip()) and not anexo_pattern.match(lines[j].strip()):
+                    if lines[j].strip():
+                        article_content.append(lines[j].strip())
+                    j += 1
+                
+                # Procesar el contenido del artículo
+                if article_content:
+                    # Verificar si tiene incisos
+                    has_incisos = any(inciso_pattern.match(line) for line in article_content)
+                    
+                    if has_incisos:
+                        # Formatear incisos como lista con viñetas
+                        current_text = ""
+                        for ac in article_content:
+                            inciso_match = inciso_pattern.match(ac)
+                            if inciso_match:
+                                # Si hay texto previo, añadirlo
+                                if current_text:
+                                    markdown_lines.append(current_text)
+                                    current_text = ""
+                                
+                                # Añadir el inciso formateado
+                                markdown_lines.append(f"- **{inciso_match.group(1)}** {ac[inciso_match.end():].strip()}")
+                            else:
+                                # Acumular texto normal o añadirlo a la última viñeta
+                                if markdown_lines and markdown_lines[-1].startswith("- **"):
+                                    markdown_lines[-1] += f" {ac}"
+                                else:
+                                    current_text += f" {ac}"
+                        
+                        # Añadir el texto final si quedó algo
+                        if current_text.strip():
+                            markdown_lines.append(current_text.strip())
+                    else:
+                        # Añadir como texto normal
+                        markdown_lines.append(" ".join(article_content))
+                
+                markdown_lines.append("")  # Espacio después del artículo
+                i = j
+                continue
+            
+            # Detectar firma del rector
+            if "Rector" in line and "Shuberoff" in line:
+                markdown_lines.append(f"\n**{line}**")
+                rector_line = True
+                i += 1
+                continue
+            
+            # Procesar líneas normales
+            if line:
+                # Si es una línea vacía, mantener el formato
+                if not in_list:
+                    markdown_lines.append(line)
+                else:
+                    # Estamos en una lista, intentar mantener formato de lista
+                    if subsection_pattern.match(line):
+                        markdown_lines.append(f"- {line}")
+                    else:
+                        markdown_lines.append(line)
+                        in_list = False
+            else:
+                # Mantener líneas en blanco para preservar formato
+                markdown_lines.append("")
+            
+            i += 1
         
-        return '\n'.join(markdown_lines)
+        # Eliminar líneas en blanco repetidas
+        clean_markdown = []
+        prev_empty = False
+        for line in markdown_lines:
+            if not line.strip():
+                if not prev_empty:
+                    clean_markdown.append("")
+                    prev_empty = True
+            else:
+                clean_markdown.append(line)
+                prev_empty = False
+        
+        return "\n".join(clean_markdown)
 
     def split_into_chunks(self, text: str, filename: str, chunk_size: int = 250, overlap: int = 50) -> List[str]:
         if not text:
@@ -370,62 +521,178 @@ class DocumentPreprocessor:
             return []
         
         chunks = []
-        current_section = []
-        current_size = 0
-        
         lines = markdown_text.split('\n')
-        i = 0
         
-        while i < len(lines):
-            line = lines[i].strip()
+        # Detectar patrones markdown específicos
+        title_pattern = re.compile(r'^#\s+')  # Título principal
+        section_pattern = re.compile(r'^##\s+')  # Secciones
+        article_pattern = re.compile(r'^###\s+Art(?:ículo|\.)\s*(\d+\º?)\.?', re.IGNORECASE)  # Artículos
+        
+        # Primero identificar las secciones principales y los artículos
+        section_indices = []
+        article_indices = []
+        
+        for i, line in enumerate(lines):
+            if title_pattern.match(line):
+                section_indices.append(i)
+            elif section_pattern.match(line):
+                section_indices.append(i)
+            elif article_pattern.match(line):
+                article_indices.append(i)
+        
+        # Si hay artículos, usar eso como división principal
+        if article_indices:
+            # Agregar el índice final para facilitar los slices
+            article_indices.append(len(lines))
             
-            # Si es un encabezado, comenzar nuevo chunk
-            if line.startswith('#'):
-                if current_section:
+            for i in range(len(article_indices) - 1):
+                start_idx = article_indices[i]
+                end_idx = article_indices[i + 1]
+                
+                # Extraer artículo completo
+                article_lines = lines[start_idx:end_idx]
+                article_text = '\n'.join(article_lines)
+                
+                # Si el artículo es pequeño, dejarlo como un chunk
+                if len(article_text.split()) <= chunk_size:
                     doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                    chunks.append(doc_prefix + '\n'.join(current_section))
-                current_section = [line]
-                current_size = len(line.split())
-                i += 1
-                continue
+                    chunks.append(doc_prefix + article_text)
+                else:
+                    # Dividir artículos grandes en sub-chunks
+                    current_chunk = []
+                    current_size = 0
+                    
+                    for line in article_lines:
+                        line_words = len(line.split())
+                        
+                        if current_size + line_words <= chunk_size:
+                            current_chunk.append(line)
+                            current_size += line_words
+                        else:
+                            # Guardar el chunk actual si tiene contenido
+                            if current_chunk:
+                                doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                                chunks.append(doc_prefix + '\n'.join(current_chunk))
+                            
+                            # Iniciar un nuevo chunk manteniendo el nombre del artículo para contexto
+                            current_chunk = [article_lines[0]]  # Agregar siempre la línea del artículo
+                            if line != article_lines[0]:  # Evitar duplicar el nombre del artículo
+                                current_chunk.append(line)
+                                current_size = line_words + len(article_lines[0].split())
+                            else:
+                                current_size = line_words
+                    
+                    # Guardar el último chunk del artículo
+                    if current_chunk:
+                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                        chunks.append(doc_prefix + '\n'.join(current_chunk))
+        
+        # Si no hay artículos, dividir por secciones
+        elif section_indices:
+            section_indices.append(len(lines))
             
-            # Si la línea está vacía, mantener el formato
-            if not line:
-                current_section.append('')
-                i += 1
-                continue
+            for i in range(len(section_indices) - 1):
+                start_idx = section_indices[i]
+                end_idx = section_indices[i + 1]
+                
+                section_lines = lines[start_idx:end_idx]
+                section_text = '\n'.join(section_lines)
+                
+                # Si la sección es pequeña, usarla como chunk
+                if len(section_text.split()) <= chunk_size:
+                    doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                    chunks.append(doc_prefix + section_text)
+                else:
+                    # Dividir secciones grandes
+                    current_chunk = [section_lines[0]]  # Mantener el encabezado
+                    current_size = len(section_lines[0].split())
+                    
+                    for line in section_lines[1:]:
+                        line_words = len(line.split())
+                        
+                        if current_size + line_words <= chunk_size:
+                            current_chunk.append(line)
+                            current_size += line_words
+                        else:
+                            # Guardar chunk actual
+                            doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                            chunks.append(doc_prefix + '\n'.join(current_chunk))
+                            
+                            # Iniciar nuevo chunk con contexto
+                            current_chunk = [section_lines[0], line]
+                            current_size = len(section_lines[0].split()) + line_words
+                    
+                    # Guardar el último chunk de la sección
+                    if current_chunk:
+                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                        chunks.append(doc_prefix + '\n'.join(current_chunk))
+        
+        # Si no hay artículos ni secciones, usar el método normal
+        else:
+            current_section = []
+            current_size = 0
             
-            # Agregar líneas hasta alcanzar el tamaño del chunk
-            words = line.split()
-            if current_size + len(words) <= chunk_size:
-                current_section.append(line)
-                current_size += len(words)
-                i += 1
-            else:
-                # Si el chunk actual está vacío, forzar la inclusión de la línea
-                if not current_section:
-                    current_section.append(line)
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+                
+                # Si es un título o encabezado, siempre iniciar nuevo chunk
+                if title_pattern.match(line) or section_pattern.match(line):
+                    if current_section:
+                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                        chunks.append(doc_prefix + '\n'.join(current_section))
+                    current_section = [line]
+                    current_size = len(line.split())
                     i += 1
+                    continue
                 
-                # Guardar chunk actual
-                if current_section:
-                    doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                    chunks.append(doc_prefix + '\n'.join(current_section))
-                
-                # Mantener contexto para el siguiente chunk
-                current_section = []
-                for j in range(max(0, i - overlap), i):
-                    if lines[j].startswith('#'):
-                        current_section.append(lines[j])
-                current_size = sum(len(line.split()) for line in current_section)
+                # Procesar líneas normales
+                words = line.split() if line else []
+                if current_size + len(words) <= chunk_size:
+                    if line or current_section:  # No añadir líneas vacías al inicio
+                        current_section.append(line)
+                    current_size += len(words)
+                    i += 1
+                else:
+                    # Si el chunk actual está vacío, forzar la inclusión de esta línea
+                    if not current_section:
+                        current_section.append(line)
+                        i += 1
+                    
+                    # Guardar chunk actual
+                    if current_section:
+                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                        chunks.append(doc_prefix + '\n'.join(current_section))
+                    
+                    # Mantener contexto para el siguiente chunk (encabezados importantes)
+                    current_section = []
+                    for j in range(max(0, i - overlap), i):
+                        if title_pattern.match(lines[j]) or section_pattern.match(lines[j]):
+                            current_section.append(lines[j])
+                    current_size = sum(len(line.split()) for line in current_section)
+            
+            # Añadir el último chunk si existe
+            if current_section:
+                doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                chunks.append(doc_prefix + '\n'.join(current_section))
         
-        # Agregar el último chunk si existe
-        if current_section:
-            doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-            chunks.append(doc_prefix + '\n'.join(current_section))
+        # Post-procesamiento para evitar chunks muy pequeños
+        processed_chunks = []
+        min_chunk_size = 50  # palabras
         
-        logger.info(f"Documento dividido en {len(chunks)} chunks")
-        return chunks
+        for i, chunk in enumerate(chunks):
+            chunk_words = len(chunk.split())
+            
+            if chunk_words < min_chunk_size and i > 0 and not title_pattern.search(chunk) and not section_pattern.search(chunk):
+                # Combinar chunks pequeños con el anterior
+                previous_chunk = processed_chunks[-1]
+                combined_chunk = previous_chunk + "\n\n" + chunk
+                processed_chunks[-1] = combined_chunk
+            else:
+                processed_chunks.append(chunk)
+        
+        logger.info(f"Documento dividido en {len(processed_chunks)} chunks")
+        return processed_chunks
 
     def process_all_documents(self):
         """Procesa todos los documentos PDF en el directorio raw con mejor manejo de errores."""

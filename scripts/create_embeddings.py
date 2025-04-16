@@ -54,8 +54,8 @@ class EmbeddingGenerator:
         self.embeddings_dir = Path(embeddings_dir)
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         
-        # Modelo optimizado para español y documentos administrativos
-        model_name = os.getenv('EMBEDDING_MODEL_NAME', 'hiiamsid/sentence_similarity_spanish_es')
+        # Modelo optimizado para multilingüe con mejor rendimiento en español
+        model_name = os.getenv('EMBEDDING_MODEL_NAME', 'intfloat/multilingual-e5-large-instruct')
         logger.info(f"Intentando cargar modelo de embeddings: {model_name}")
         
         try:
@@ -76,7 +76,7 @@ class EmbeddingGenerator:
         except Exception as e:
             logger.error(f"Error al cargar modelo primario: {str(e)}")
             # Usar modelo de respaldo
-            model_name = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+            model_name = 'sentence-transformers/paraphrase-multilingual-mpnet-base-v2'
             logger.warning(f"Usando modelo de respaldo: {model_name}")
             self.model = SentenceTransformer(model_name, device=device)
         
@@ -159,7 +159,7 @@ class EmbeddingGenerator:
         
         embeddings = []
         
-        # Preprocesar textos
+        # Preprocesar textos (para documentos no se requiere formato especial en E5)
         valid_texts = []
         invalid_indices = []
         
