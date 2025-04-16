@@ -20,6 +20,8 @@ from unidecode import unidecode
 from sklearn.metrics.pairwise import cosine_similarity
 import openai  # Importar OpenAI para la nueva integración
 import tiktoken  # Para contar tokens de OpenAI
+import time  # Añadido para manejar timestamps
+import uuid  # Para generar un ID único
 
 # Crear directorio de logs si no existe
 Path("logs").mkdir(exist_ok=True)
@@ -792,6 +794,7 @@ class RAGSystem:
         # Histórico de conversaciones
         self.conversation_histories = {}  # Diccionario: user_id -> historial
         self.max_history_length = 5
+        self.user_history = {}
         
         # Obtener configuración de API y llaves
         self.openai_api_key = os.getenv('OPENAI_API_KEY')
@@ -1110,18 +1113,75 @@ class RAGSystem:
         
         # Construir el prompt sin usar detección de intenciones
         
-        # Crear una versión resumida de las FAQ
-        faqs_summary = """
+        # Versión completa de las FAQ
+        faqs_complete = """
 [PREGUNTAS FRECUENTES]
-- Constancia de alumno regular: Generar en Sitio de Inscripciones, imprimir y presentar.
-- Baja de materia: Hasta 2 semanas antes del parcial. Seleccionar "Baja de asignatura" en Sitio de Inscripciones.
-- Anulación de inscripción a final: Presentar en ventanilla el número de constancia.
-- Inscripción o asignación fallida: Dirigirse a la cátedra con Libreta o DNI.
-- Reincorporación: Gestionar por Sitio de Inscripciones.
-- Recursada: Seleccionar "Recursada" en Sitio de Inscripciones.
-- Tercera cursada: Seleccionar "3º Cursada" en Sitio de Inscripciones.
-- Cuarta cursada o más: Seleccionar "4º Cursada o más" en Sitio de Inscripciones.
-- Prórroga de materias: Seleccionar "Prórroga de asignatura" en Sitio de Inscripciones.
+1. Constancia de alumno regular:
+   Puedes tramitar la constancia de alumno regular en el Sitio de Inscripciones siguiendo estos pasos:
+   - Paso 1: Ingresar tu DNI y contraseña.
+   - Paso 2: Seleccionar la opción "Constancia de alumno regular" en el inicio de trámites.
+   - Paso 3: Imprimir la constancia. Luego, deberás presentarte con tu Libreta Universitaria o DNI y el formulario impreso (1 hoja que posee 3 certificados de alumno regular) en la ventanilla del Ciclo Biomédico.
+
+2. Baja de materia:
+   El tiempo máximo para dar de baja una materia es:
+   - 2 semanas antes del primer parcial, o
+   - Hasta el 25% de la cursada en asignaturas sin examen parcial.
+   Para dar de baja una materia, sigue estos pasos en el Sitio de Inscripciones:
+   - Paso 1: Ingresar tu DNI y contraseña.
+   - Paso 2: Seleccionar "Baja de asignatura".
+   - Paso 3: Imprimir el certificado de baja. Una vez finalizado el trámite, el estado será "Resuelto Positivamente" y no deberás acudir a la Dirección de Alumnos.
+
+3. Anulación de inscripción a final:
+   Para anular la inscripción a un final, debes acudir a la ventanilla del Ciclo Biomédico presentando el número de constancia generado durante el trámite de inscripción.
+
+4. No lograr inscripción o asignación a materia:
+   Si no logras inscribirte o no te asignan una materia, debes dirigirte a la cátedra o departamento correspondiente y solicitar la inclusión en lista, presentando tu Libreta Universitaria o DNI.
+
+5. Reincorporación:
+   La reincorporación se solicita a través del Sitio de Inscripciones, seleccionando la opción "Reincorporación a la carrera":
+   - Para la 1ª reincorporación: El trámite es automático y aparece resuelto positivamente en el sistema, sin necesidad de trámite en ventanilla.
+   - Si ya fuiste reincorporado anteriormente: Debes realizar el trámite, imprimirlo (consta de 2 hojas: 1 certificado y 1 constancia) y presentarlo en la ventanilla del Ciclo Biomédico, donde la Comisión de Readmisión resolverá tu caso.
+
+6. Recursada (inscripción por segunda vez):
+   Para solicitar una recursada, genera el trámite en el Sitio de Inscripciones siguiendo estos pasos:
+   - Paso 1: Ingresar tu DNI y contraseña.
+   - Paso 2: Seleccionar "Recursada".
+   El trámite es automático y, si aparece resuelto positivamente en el sistema, no necesitas acudir a ventanilla.
+   - Si en el sistema apareces como dado DE BAJA en la cursada anterior, solo debes generar el trámite y te inscribirás como la primera vez, sin abonar arancel.
+   - Si no apareces dado DE BAJA, deberás:
+     1. Realizar el trámite.
+     2. Generar e imprimir el talón de pago.
+     3. Pagar en la Dirección de Tesorería.
+     4. Presentar un comprobante de pago en los buzones del Ciclo Biomédico.
+
+7. Tercera cursada:
+   Para solicitar la tercera cursada, sigue estos pasos en el Sitio de Inscripciones:
+   - Paso 1: Ingresar tu DNI y contraseña.
+   - Paso 2: Seleccionar "3º Cursada".
+   - Paso 3: Imprimir la constancia y el certificado.
+   Luego:
+   - Si figuras como dado DE BAJA en las dos cursadas anteriores, te inscribes como si fuera la primera vez sin abonar arancel.
+   - Si no, debes:
+     1. Realizar el trámite.
+     2. Generar e imprimir el talón de pago.
+     3. Pagar en la Dirección de Tesorería.
+     4. Presentar un comprobante de pago en el buzón del Ciclo Biomédico.
+
+8. Cuarta cursada o más:
+   Para la cuarta cursada o más, genera el trámite en el Sitio de Inscripciones con los siguientes pasos:
+   - Paso 1: Dirigirte a Inscripciones.
+   - Paso 2: Ingresar tu DNI y contraseña.
+   - Paso 3: Seleccionar "4º Cursada o más".
+   - Paso 4: Imprimir la constancia y el certificado.
+   Luego, deberás presentarte con tu Libreta Universitaria y las constancias impresas en la ventanilla del Ciclo Biomédico y acudir a la Dirección de Alumnos.
+
+9. Prórroga de materias:
+   Para solicitar la prórroga de una asignatura, sigue estos pasos en el Sitio de Inscripciones:
+   - Paso 1: Dirigirte a Inscripciones.
+   - Paso 2: Ingresar tu DNI y contraseña.
+   - Paso 3: Seleccionar "Prórroga de asignatura".
+   - Paso 4: Imprimir la constancia.
+   Si se trata de la primera o segunda prórroga, el trámite se resuelve positivamente. Si es la tercera o una prórroga superior, deberás presentar la constancia impresa junto con tu Libreta Universitaria en la ventanilla del Ciclo Biomédico.
 """
 
         # Solo incluir las fuentes en el prompt si no son nulas y la lista no está vacía
@@ -1143,7 +1203,7 @@ INFORMACIÓN RELEVANTE:
 {context}
 
 PREGUNTAS FRECUENTES:
-{faqs_summary}
+{faqs_complete}
 
 {sources_text}"""
 
@@ -1415,6 +1475,16 @@ INSTRUCCIONES:
             user_name (str, optional): Nombre del usuario si está disponible
         """
         try:
+            # Si no hay user_id, generar uno
+            if user_id is None:
+                user_id = str(uuid.uuid4())
+            
+            # Obtener historial de mensajes
+            history = self.get_user_history(user_id)
+            
+            # Usar el historial para contextualizar la consulta si es necesario
+            context_from_history = self._summarize_previous_message(user_id) if history else ""
+            
             # Normalizar la consulta
             query_original = query
             query = query.lower().strip()
@@ -1543,15 +1613,87 @@ INSTRUCCIONES:
         # Normalizar la consulta
         query_normalized = unidecode(query.lower())
         
+        # Crear las respuestas detalladas para cada FAQ
+        faq_responses = {
+            "constancia": """📋 Constancia de alumno regular:
+Puedes tramitar la constancia de alumno regular en el Sitio de Inscripciones siguiendo estos pasos:
+- Paso 1: Ingresar tu DNI y contraseña.
+- Paso 2: Seleccionar la opción "Constancia de alumno regular" en el inicio de trámites.
+- Paso 3: Imprimir la constancia. Luego, deberás presentarte con tu Libreta Universitaria o DNI y el formulario impreso (1 hoja que posee 3 certificados de alumno regular) en la ventanilla del Ciclo Biomédico.""",
+            
+            "baja": """📝 Baja de materia:
+El tiempo máximo para dar de baja una materia es:
+- 2 semanas antes del primer parcial, o
+- Hasta el 25% de la cursada en asignaturas sin examen parcial.
+
+Para dar de baja una materia, sigue estos pasos en el Sitio de Inscripciones:
+- Paso 1: Ingresar tu DNI y contraseña.
+- Paso 2: Seleccionar "Baja de asignatura".
+- Paso 3: Imprimir el certificado de baja.
+
+Una vez finalizado el trámite, el estado será "Resuelto Positivamente" y no deberás acudir a la Dirección de Alumnos.""",
+            
+            "anulacion": """❌ Anulación de inscripción a final:
+Para anular la inscripción a un final, debes acudir a la ventanilla del Ciclo Biomédico presentando el número de constancia generado durante el trámite de inscripción.""",
+            
+            "inscripcion": """📊 No lograr inscripción o asignación a materia:
+Si no logras inscribirte o no te asignan una materia, debes dirigirte a la cátedra o departamento correspondiente y solicitar la inclusión en lista, presentando tu Libreta Universitaria o DNI.""",
+            
+            "reincorporacion": """🔄 Reincorporación:
+La reincorporación se solicita a través del Sitio de Inscripciones, seleccionando la opción "Reincorporación a la carrera":
+- Para la 1ª reincorporación: El trámite es automático y aparece resuelto positivamente en el sistema, sin necesidad de trámite en ventanilla.
+- Si ya fuiste reincorporado anteriormente: Debes realizar el trámite, imprimirlo (consta de 2 hojas: 1 certificado y 1 constancia) y presentarlo en la ventanilla del Ciclo Biomédico, donde la Comisión de Readmisión resolverá tu caso.""",
+            
+            "recursada": """🔁 Recursada (inscripción por segunda vez):
+Para solicitar una recursada, genera el trámite en el Sitio de Inscripciones siguiendo estos pasos:
+- Paso 1: Ingresar tu DNI y contraseña.
+- Paso 2: Seleccionar "Recursada".
+
+El trámite es automático y, si aparece resuelto positivamente en el sistema, no necesitas acudir a ventanilla.
+- Si en el sistema apareces como dado DE BAJA en la cursada anterior, solo debes generar el trámite y te inscribirás como la primera vez, sin abonar arancel.
+- Si no apareces dado DE BAJA, deberás:
+  1. Realizar el trámite.
+  2. Generar e imprimir el talón de pago.
+  3. Pagar en la Dirección de Tesorería.
+  4. Presentar un comprobante de pago en los buzones del Ciclo Biomédico.""",
+            
+            "tercera": """3️⃣ Tercera cursada:
+Para solicitar la tercera cursada, sigue estos pasos en el Sitio de Inscripciones:
+- Paso 1: Ingresar tu DNI y contraseña.
+- Paso 2: Seleccionar "3º Cursada".
+- Paso 3: Imprimir la constancia y el certificado.
+
+Luego:
+- Si figuras como dado DE BAJA en las dos cursadas anteriores, te inscribes como si fuera la primera vez sin abonar arancel.
+- Si no, debes:
+  1. Realizar el trámite.
+  2. Generar e imprimir el talón de pago.
+  3. Pagar en la Dirección de Tesorería.
+  4. Presentar un comprobante de pago en el buzón del Ciclo Biomédico.""",
+            
+            "cuarta": """4️⃣ Cuarta cursada o más:
+Para la cuarta cursada o más, genera el trámite en el Sitio de Inscripciones con los siguientes pasos:
+- Paso 1: Dirigirte a Inscripciones.
+- Paso 2: Ingresar tu DNI y contraseña.
+- Paso 3: Seleccionar "4º Cursada o más".
+- Paso 4: Imprimir la constancia y el certificado.
+
+Luego, deberás presentarte con tu Libreta Universitaria y las constancias impresas en la ventanilla del Ciclo Biomédico y acudir a la Dirección de Alumnos.""",
+            
+            "prorroga": """⏳ Prórroga de materias:
+Para solicitar la prórroga de una asignatura, sigue estos pasos en el Sitio de Inscripciones:
+- Paso 1: Dirigirte a Inscripciones.
+- Paso 2: Ingresar tu DNI y contraseña.
+- Paso 3: Seleccionar "Prórroga de asignatura".
+- Paso 4: Imprimir la constancia.
+
+Si se trata de la primera o segunda prórroga, el trámite se resuelve positivamente. Si es la tercera o una prórroga superior, deberás presentar la constancia impresa junto con tu Libreta Universitaria en la ventanilla del Ciclo Biomédico."""
+        }
+        
         # Buscar coincidencias
         for faq_type, keywords in faq_keywords.items():
             if any(keyword in query_normalized for keyword in keywords):
-                emoji = random.choice(information_emojis)
-                if faq_type == "constancia":
-                    return f"{emoji} Para tramitar la constancia de alumno regular en el Sitio de Inscripciones:\n- Paso 1: Ingresar tu DNI y contraseña.\n- Paso 2: Seleccionar la opción \"Constancia de alumno regular\" en el inicio de trámites.\n- Paso 3: Imprimir la constancia. Luego, deberás presentarte con tu Libreta Universitaria o DNI y el formulario impreso (1 hoja que posee 3 certificados de alumno regular) en la ventanilla del Ciclo Biomédico."
-                elif faq_type == "recursada":
-                    return f"{emoji} Para solicitar una recursada, genera el trámite en el Sitio de Inscripciones siguiendo estos pasos:\n- Paso 1: Ingresar tu DNI y contraseña.\n- Paso 2: Seleccionar \"Recursada\".\nEl trámite es automático y, si aparece resuelto positivamente en el sistema, no necesitas acudir a ventanilla.\n- Si en el sistema apareces como dado DE BAJA en la cursada anterior, solo debes generar el trámite y te inscribirás como la primera vez, sin abonar arancel.\n- Si no apareces dado DE BAJA, deberás:\n  1. Realizar el trámite.\n  2. Generar e imprimir el talón de pago.\n  3. Pagar en la Dirección de Tesorería.\n  4. Presentar un comprobante de pago en los buzones del Ciclo Biomédico."
-                # ... agregar el resto de las FAQs ...
+                return faq_responses.get(faq_type, "")
         
         return None
 
@@ -1595,18 +1737,25 @@ INSTRUCCIONES:
         return response, verification_score
 
     def get_user_history(self, user_id: str) -> list:
-        """Obtiene el historial de un usuario específico"""
-        if user_id not in self.conversation_histories:
-            self.conversation_histories[user_id] = []
-        return self.conversation_histories[user_id]
-    
+        """Obtiene el historial de mensajes del usuario."""
+        if user_id not in self.user_history:
+            self.user_history[user_id] = []
+        return self.user_history[user_id]
+
     def update_user_history(self, user_id: str, query: str, response: str):
-        """Actualiza el historial de un usuario específico"""
-        history = self.get_user_history(user_id)
-        history.append((query, response))
-        if len(history) > self.max_history_length:
-            history = history[-self.max_history_length:]
-        self.conversation_histories[user_id] = history
+        """Actualiza el historial de mensajes del usuario."""
+        if user_id not in self.user_history:
+            self.user_history[user_id] = []
+        
+        # Agregar nuevo mensaje al historial
+        self.user_history[user_id].append({
+            "query": query,
+            "response": response,
+            "timestamp": time.time()
+        })
+        
+        # Limitar a los últimos 5 mensajes
+        self.user_history[user_id] = self.user_history[user_id][-5:]
 
 def main():
     """Función principal para ejecutar el sistema RAG."""
