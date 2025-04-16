@@ -10,9 +10,14 @@ import ast
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 from dotenv import load_dotenv
+import openai
 
-# Cargar variables de entorno
-load_dotenv()
+# Cargar variables de entorno de forma más explícita
+dotenv_path = Path('.env')
+if dotenv_path.exists():
+    load_dotenv(dotenv_path=dotenv_path)
+else:
+    load_dotenv()
 
 # Configuración de logging
 logging.basicConfig(
@@ -24,6 +29,13 @@ logger = logging.getLogger(__name__)
 # Determinar el entorno (desarrollo o producción)
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 logger.info(f"Iniciando generación de embeddings en entorno: {ENVIRONMENT}")
+
+# Configuración de OpenAI
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
+
+logger.info(f"OPENAI_API_KEY configurada: {'Sí' if OPENAI_API_KEY else 'No'}")
+logger.info(f"Modelo de embeddings: {OPENAI_EMBEDDING_MODEL}")
 
 # Importaciones condicionales para Pinecone (solo en producción)
 if ENVIRONMENT == 'production':
@@ -41,10 +53,87 @@ if ENVIRONMENT == 'production':
         logger.warning("No se pudo importar pinecone. Se usará FAISS local.")
         ENVIRONMENT = 'development'
 
+class OpenAIEmbedding:
+    def __init__(self, model_name: str, api_key: str, timeout: int = 30):
+        """
+        Inicializa el cliente para embeddings de OpenAI.
+        
+        Args:
+            model_name (str): Nombre del modelo (ej: text-embedding-3-small)
+            api_key (str): API key de OpenAI
+            timeout (int): Timeout para las llamadas a la API
+        """
+        self.model_name = model_name
+        self.api_key = api_key
+        self.timeout = timeout
+        
+        # Configurar cliente de OpenAI
+        openai.api_key = api_key
+        
+        logger.info(f"Modelo de embeddings OpenAI inicializado: {model_name}")
+    
+    def encode(self, texts: List[str], **kwargs) -> np.ndarray:
+        """
+        Genera embeddings para una lista de textos.
+        
+        Args:
+            texts (List[str]): Lista de textos para generar embeddings
+            kwargs: Argumentos adicionales
+            
+        Returns:
+            np.ndarray: Matriz de embeddings (una fila por texto)
+        """
+        convert_to_numpy = kwargs.get('convert_to_numpy', True)
+        normalize_embeddings = kwargs.get('normalize_embeddings', False)
+        
+        try:
+            # Crear embeddings usando la API de OpenAI
+            response = openai.embeddings.create(
+                model=self.model_name,
+                input=texts,
+                encoding_format="float",
+                timeout=self.timeout
+            )
+            
+            # Extraer los embeddings de la respuesta
+            embeddings = [item.embedding for item in response.data]
+            
+            # Convertir a numpy array
+            embeddings_array = np.array(embeddings, dtype=np.float32)
+            
+            # Normalizar si es necesario
+            if normalize_embeddings:
+                norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+                embeddings_array = embeddings_array / norms
+                
+            return embeddings_array
+            
+        except Exception as e:
+            logger.error(f"Error al generar embeddings con OpenAI ({self.model_name}): {str(e)}")
+            raise
+    
+    def get_sentence_embedding_dimension(self) -> int:
+        """
+        Retorna la dimensión de los embeddings para compatibilidad con SentenceTransformer.
+        
+        Returns:
+            int: Dimensión de los embeddings
+        """
+        # text-embedding-3-small tiene dimensión 1536
+        if "small" in self.model_name:
+            return 1536
+        # text-embedding-3-large tiene dimensión 3072
+        elif "large" in self.model_name:
+            return 3072
+        # Default para text-embedding-ada-002
+        else:
+            return 1536
+            
+
 class EmbeddingGenerator:
     def __init__(self, processed_dir: str, embeddings_dir: str):
         """
-        Inicializa el generador de embeddings.
+        Inicializa el generador de embeddings. Siempre usa OpenAI.
         
         Args:
             processed_dir (str): Directorio con documentos procesados
@@ -54,31 +143,19 @@ class EmbeddingGenerator:
         self.embeddings_dir = Path(embeddings_dir)
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         
-        # Modelo optimizado para multilingüe con mejor rendimiento en español
-        model_name = os.getenv('EMBEDDING_MODEL_NAME', 'intfloat/multilingual-e5-large-instruct')
-        logger.info(f"Intentando cargar modelo de embeddings: {model_name}")
+        # Inicializar OpenAI
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY no está configurada. Es necesaria para generar embeddings.")
         
-        try:
-            # Intentar usar GPU si está disponible
-            import torch
-            if torch.cuda.is_available():
-                device = 'cuda'
-            elif torch.backends.mps.is_available():
-                device = 'mps'
-            else:
-                device = 'cpu'
-            logger.info(f"Usando dispositivo: {device}")
-            
-            self.model = SentenceTransformer(model_name, device=device)
-            self.model.max_seq_length = 512  # Ajustar según necesidad
-            logger.info(f"Modelo de embeddings inicializado: {model_name}")
-            logger.info(f"Dimensión del modelo: {self.model.get_sentence_embedding_dimension()}")
-        except Exception as e:
-            logger.error(f"Error al cargar modelo primario: {str(e)}")
-            # Usar modelo de respaldo
-            model_name = 'sentence-transformers/paraphrase-multilingual-mpnet-base-v2'
-            logger.warning(f"Usando modelo de respaldo: {model_name}")
-            self.model = SentenceTransformer(model_name, device=device)
+        # Inicializar modelo de OpenAI
+        logger.info(f"Inicializando modelo de embeddings OpenAI: {OPENAI_EMBEDDING_MODEL}")
+        self.model = OpenAIEmbedding(
+            model_name=OPENAI_EMBEDDING_MODEL,
+            api_key=OPENAI_API_KEY,
+            timeout=30
+        )
+        logger.info(f"Dimensión del modelo OpenAI: {self.model.get_sentence_embedding_dimension()}")
+        logger.info("OpenAI inicializado correctamente para embeddings")
         
         self.is_production = ENVIRONMENT == 'production'
         
@@ -141,7 +218,7 @@ class EmbeddingGenerator:
         
     def generate_embeddings(self, texts: List[str], batch_size: int = 16) -> np.ndarray:
         """
-        Genera embeddings para una lista de textos con más robustez y control.
+        Genera embeddings para una lista de textos usando OpenAI.
         
         Args:
             texts (List[str]): Lista de textos a procesar
@@ -155,11 +232,9 @@ class EmbeddingGenerator:
             return np.array([])
         
         total_texts = len(texts)
-        logger.info(f"Generando embeddings para {total_texts} textos con batch_size={batch_size}")
+        logger.info(f"Generando embeddings con OpenAI para {total_texts} textos")
         
-        embeddings = []
-        
-        # Preprocesar textos (para documentos no se requiere formato especial en E5)
+        # Preprocesar textos 
         valid_texts = []
         invalid_indices = []
         
@@ -176,43 +251,39 @@ class EmbeddingGenerator:
                     text = text + " " + text  # Duplicar texto corto
                 valid_texts.append(text)
         
-        # Procesar en batches
+        # Generar embeddings con OpenAI
+        embeddings = []
+        # OpenAI soporta batches más grandes, dividimos en bloques de 100 para seguridad
+        openai_batch_size = min(batch_size * 4, 100)
+        
         try:
-            for i in tqdm(range(0, len(valid_texts), batch_size), desc="Generando embeddings"):
-                batch = valid_texts[i:i + batch_size]
-                
-                # Truncar textos muy largos
-                batch = [text[:512] if len(text) > 512 else text for text in batch]
-                
+            for i in tqdm(range(0, len(valid_texts), openai_batch_size), desc="Generando embeddings con OpenAI"):
+                batch = valid_texts[i:i + openai_batch_size]
                 try:
-                    # Generar embeddings sin normalización forzada
+                    # Llamar a la API de OpenAI
                     batch_embeddings = self.model.encode(
                         batch,
-                        show_progress_bar=False,
                         convert_to_numpy=True,
-                        normalize_embeddings=False  # Importante: no forzar normalización
+                        normalize_embeddings=False
                     )
                     embeddings.append(batch_embeddings)
                 except Exception as e:
-                    logger.error(f"Error en batch {i}: {str(e)}")
-                    # Usar embeddings de respaldo
-                    dim = self.model.get_sentence_embedding_dimension()
-                    dummy_embeddings = np.random.normal(0, 0.1, (len(batch), dim))
-                    embeddings.append(dummy_embeddings)
-        
+                    logger.error(f"Error en batch OpenAI {i}: {str(e)}")
+                    raise
+            
+            # Concatenar embeddings
+            all_embeddings = np.vstack(embeddings)
+            
+            # Normalizar si es necesario
+            if np.any(np.sum(all_embeddings * all_embeddings, axis=1) > 1.0):
+                logger.info("Normalizando embeddings finales...")
+                all_embeddings = all_embeddings / np.sqrt(np.sum(all_embeddings * all_embeddings, axis=1, keepdims=True))
+            
+            return all_embeddings
+                
         except Exception as e:
-            logger.error(f"Error general en generación de embeddings: {str(e)}")
+            logger.error(f"Error general en generación de embeddings con OpenAI: {str(e)}")
             raise
-        
-        # Concatenar todos los embeddings
-        all_embeddings = np.vstack(embeddings)
-        
-        # Normalizar al final si es necesario
-        if np.any(np.sum(all_embeddings * all_embeddings, axis=1) > 1.0):
-            logger.info("Normalizando embeddings finales...")
-            all_embeddings = all_embeddings / np.sqrt(np.sum(all_embeddings * all_embeddings, axis=1, keepdims=True))
-        
-        return all_embeddings
     
     def create_faiss_index(self, embeddings: np.ndarray) -> faiss.Index:
         """
@@ -330,7 +401,7 @@ class EmbeddingGenerator:
         logger.info(f"Resumen por archivo guardado en {summary_path}")
         
     def process_documents(self):
-        """Procesa todos los documentos y genera embeddings con mejor manejo de errores."""
+        """Procesa todos los documentos y genera embeddings con OpenAI."""
         try:
             # Cargar documentos procesados
             df = self.load_processed_documents()
@@ -379,7 +450,8 @@ class EmbeddingGenerator:
                 
             logger.info(f"Datos preparados: {len(texts)} textos de {len(df)} documentos")
             
-            # Generar embeddings
+            # Generar embeddings usando OpenAI
+            logger.info(f"Generando embeddings usando OpenAI")
             embeddings = self.generate_embeddings(texts)
             
             if embeddings.size == 0:
@@ -405,7 +477,8 @@ class EmbeddingGenerator:
             # Guardar configuración utilizada para referencia
             config = {
                 'date': pd.Timestamp.now().isoformat(),
-                'embedding_model': self.model.get_sentence_embedding_dimension(),
+                'embedding_model': 'OpenAI',
+                'model_name': OPENAI_EMBEDDING_MODEL,
                 'dimension': self.model.get_sentence_embedding_dimension(),
                 'num_vectors': len(texts),
                 'environment': ENVIRONMENT,
@@ -432,10 +505,33 @@ def main():
         logger.info("Por favor, ejecute primero el script de preprocesamiento.")
         return
     
+    # Mostrar configuración
+    logger.info("=== Configuración de embeddings ===")
+    logger.info(f"Entorno: {ENVIRONMENT}")
+    
+    if OPENAI_API_KEY:
+        logger.info(f"Modelo: OpenAI {OPENAI_EMBEDDING_MODEL}")
+        logger.info("API Key de OpenAI encontrada ✓")
+    else:
+        logger.error("❌ API Key de OpenAI NO encontrada - Se requiere para el funcionamiento")
+        logger.error("El script no puede continuar sin una API Key de OpenAI")
+        return
+    
+    if ENVIRONMENT == 'production':
+        logger.info(f"Almacenamiento: Pinecone ({PINECONE_INDEX_NAME})")
+    else:
+        logger.info("Almacenamiento: FAISS local")
+    
+    logger.info("================================")
     logger.info(f"Iniciando generación de embeddings. Dir procesado: {processed_dir}, Dir embeddings: {embeddings_dir}")
     
-    generator = EmbeddingGenerator(processed_dir, embeddings_dir)
-    generator.process_documents()
+    try:
+        generator = EmbeddingGenerator(processed_dir, embeddings_dir)
+        generator.process_documents()
+        logger.info("Proceso de generación de embeddings completado exitosamente")
+    except Exception as e:
+        logger.error(f"Error en la generación de embeddings: {str(e)}")
+        logger.error("El proceso no pudo completarse correctamente")
 
 if __name__ == "__main__":
     main() 

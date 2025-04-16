@@ -18,6 +18,8 @@ import re
 import random
 from unidecode import unidecode
 from sklearn.metrics.pairwise import cosine_similarity
+import openai  # Importar OpenAI para la nueva integración
+import tiktoken  # Para contar tokens de OpenAI
 
 # Crear directorio de logs si no existe
 Path("logs").mkdir(exist_ok=True)
@@ -259,11 +261,6 @@ logger = logging.getLogger(__name__)
 
 # Cargar variables de entorno
 load_dotenv()
-
-# Configurar token de Hugging Face si está disponible
-if "HUGGING_FACE_HUB_TOKEN" in os.environ:
-    huggingface_hub.login(token=os.environ["HUGGING_FACE_HUB_TOKEN"], add_to_git_credential=False)
-    logger.info("Configurado token de Hugging Face desde variables de entorno")
 
 # Determinar el entorno (desarrollo o producción)
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
@@ -645,6 +642,137 @@ class LocalModel(BaseModel):
             logger.error(f"Error al generar texto localmente: {str(e)}")
             raise
 
+# Clase para usar la API de OpenAI
+class OpenAIModel(BaseModel):
+    def __init__(self, model_name: str, api_key: str, timeout: int = 30, max_output_tokens: int = 300):
+        """
+        Inicializa el cliente para OpenAI.
+        
+        Args:
+            model_name (str): Nombre del modelo (ej: gpt-4o-mini)
+            api_key (str): API key de OpenAI
+            timeout (int): Timeout para las llamadas a la API
+            max_output_tokens (int): Límite máximo de tokens para la respuesta
+        """
+        self.model_name = model_name
+        self.api_key = api_key
+        self.timeout = timeout
+        self.max_output_tokens = max_output_tokens
+        
+        # Cargar parámetros de generación desde variables de entorno
+        self.temperature = float(os.getenv('TEMPERATURE', '0.7'))
+        self.top_p = float(os.getenv('TOP_P', '0.9'))
+        self.top_k = int(os.getenv('TOP_K', '50'))
+        
+        # Configurar cliente de OpenAI
+        openai.api_key = api_key
+        
+        logger.info(f"Modelo OpenAI inicializado: {model_name}")
+        
+    def generate(self, prompt: str, **kwargs) -> str:
+        """
+        Genera texto usando la API de OpenAI (Chat Completions).
+        
+        Args:
+            prompt (str): Texto de entrada
+            kwargs: Argumentos adicionales para la generación
+            
+        Returns:
+            str: Texto generado
+        """
+        try:
+            # Usar parámetros de kwargs si se proporcionan, si no usar los valores por defecto de las variables de entorno
+            temperature = kwargs.get("temperature", self.temperature)
+            max_tokens = kwargs.get("max_tokens", self.max_output_tokens)
+            top_p = kwargs.get("top_p", self.top_p)
+            
+            # Crear los mensajes para el formato de chat de OpenAI
+            messages = [{"role": "user", "content": prompt}]
+            
+            # Realizar la llamada a la API
+            response = openai.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                timeout=self.timeout
+            )
+            
+            # Extraer y retornar la respuesta
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            logger.error(f"Error al generar texto con OpenAI ({self.model_name}): {str(e)}")
+            raise
+
+# Clase para crear embeddings usando OpenAI
+class OpenAIEmbedding:
+    def __init__(self, model_name: str, api_key: str, timeout: int = 30):
+        """
+        Inicializa el cliente para embeddings de OpenAI.
+        
+        Args:
+            model_name (str): Nombre del modelo (ej: text-embedding-3-small)
+            api_key (str): API key de OpenAI
+            timeout (int): Timeout para las llamadas a la API
+        """
+        self.model_name = model_name
+        self.api_key = api_key
+        self.timeout = timeout
+        
+        # Configurar cliente de OpenAI
+        openai.api_key = api_key
+        
+        logger.info(f"Modelo de embeddings OpenAI inicializado: {model_name}")
+    
+    def encode(self, texts: List[str], **kwargs) -> np.ndarray:
+        """
+        Genera embeddings para una lista de textos.
+        
+        Args:
+            texts (List[str]): Lista de textos para generar embeddings
+            kwargs: Argumentos adicionales
+            
+        Returns:
+            np.ndarray: Matriz de embeddings (una fila por texto)
+        """
+        try:
+            # Crear embeddings usando la API de OpenAI
+            response = openai.embeddings.create(
+                model=self.model_name,
+                input=texts,
+                encoding_format="float",
+                timeout=self.timeout
+            )
+            
+            # Extraer los embeddings de la respuesta
+            embeddings = [item.embedding for item in response.data]
+            
+            # Convertir a numpy array
+            return np.array(embeddings, dtype=np.float32)
+            
+        except Exception as e:
+            logger.error(f"Error al generar embeddings con OpenAI ({self.model_name}): {str(e)}")
+            raise
+    
+    def get_sentence_embedding_dimension(self) -> int:
+        """
+        Retorna la dimensión de los embeddings para compatibilidad con SentenceTransformer.
+        
+        Returns:
+            int: Dimensión de los embeddings
+        """
+        # text-embedding-3-small tiene dimensión 1536
+        if "small" in self.model_name:
+            return 1536
+        # text-embedding-3-large tiene dimensión 3072
+        elif "large" in self.model_name:
+            return 3072
+        # Default para text-embedding-ada-002
+        else:
+            return 1536
+
 class RAGSystem:
     def __init__(
         self,
@@ -653,73 +781,107 @@ class RAGSystem:
         device: str = os.getenv('DEVICE', 'mps')
     ):
         """
-        Inicializa el sistema RAG con la siguiente lógica de prioridad:
-        1. Si USE_API=False:
-           - Intenta cargar modelo fine-tuneado local
-           - Si falla por memoria o no existe, usa API como fallback
-        2. Si USE_API=True:
-           - Usa directamente la API
+        Inicializa el sistema RAG con OpenAI:
+        - Usa GPT-4o mini de OpenAI como modelo principal
+        - Si falla, usa GPT-4.1 nano como fallback
+        - Usa text-embedding-3-small para embeddings
         """
         self.device = device
         self.embeddings_dir = Path(embeddings_dir)
         
-        # Tendríamos:
+        # Histórico de conversaciones
         self.conversation_histories = {}  # Diccionario: user_id -> historial
         self.max_history_length = 5
         
-        # Obtener configuración
-        self.use_api = os.getenv('USE_API', 'True').lower() == 'true'
-        self.api_token = os.getenv('HUGGING_FACE_HUB_TOKEN')
-        self.base_model = os.getenv('BASE_MODEL_NAME')
-        self.fallback_model = os.getenv('FALLBACK_MODEL_NAME')
+        # Obtener configuración de API y llaves
+        self.openai_api_key = os.getenv('OPENAI_API_KEY')
+        if not self.openai_api_key:
+            raise ValueError("Se requiere OPENAI_API_KEY para usar el sistema")
+        
+        # Modelos OpenAI
+        self.primary_model_name = os.getenv('PRIMARY_MODEL', 'gpt-4o-mini')
+        self.fallback_model_name = os.getenv('FALLBACK_MODEL', 'gpt-4.1-nano')
+        self.embedding_model_name = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
+        
+        # Límite de tokens para respuestas (para controlar costos)
+        self.max_output_tokens = int(os.getenv('MAX_OUTPUT_TOKENS', '300'))
+        
+        # Timeout para API
+        self.api_timeout = int(os.getenv('API_TIMEOUT', '30'))
         
         # Normalizar los ejemplos de intenciones para mejorar la detección
         self.normalized_intent_examples = self._normalize_intent_examples()
         logger.info("Ejemplos de intenciones normalizados para mejorar la clasificación")
         
-        # Verificar si existe modelo fine-tuneado
-        model_exists = os.path.exists(model_path) and os.path.isdir(model_path)
-        
-        if not self.use_api and model_exists:
-            # Intentar usar modelo local primero
-            try:
-                available_memory = get_available_memory_gb()
-                if available_memory < 16:
-                    raise MemoryError(f"Memoria insuficiente ({available_memory:.2f} GB) para cargar modelo local")
-                
-                logger.info(f"Intentando cargar modelo fine-tuneado local desde: {model_path}")
-                self.model = self._load_local_model(model_path)
-                logger.info("Modelo local cargado exitosamente")
-                return
-            except Exception as e:
-                logger.warning(f"No se pudo cargar el modelo local: {str(e)}")
-                logger.info("Cambiando a API como fallback")
-        
-        # Si llegamos aquí, usamos la API (ya sea por configuración o como fallback)
+        # Inicializar modelos de OpenAI
         try:
-            logger.info("Inicializando modelo via API")
-            self.model = self._initialize_api_model()
+            logger.info(f"Inicializando modelo principal OpenAI: {self.primary_model_name}")
+            self.model = self._initialize_openai_model(self.primary_model_name)
+            
+            # Inicializar modelo de embeddings de OpenAI
+            logger.info(f"Inicializando modelo de embeddings OpenAI: {self.embedding_model_name}")
+            self.embedding_model = OpenAIEmbedding(
+                model_name=self.embedding_model_name,
+                api_key=self.openai_api_key,
+                timeout=self.api_timeout
+            )
+            logger.info(f"Dimensión del modelo de embeddings: {self.embedding_model.get_sentence_embedding_dimension()}")
         except Exception as e:
-            raise RuntimeError(f"No se pudo inicializar ningún modelo (local ni API): {str(e)}")
-        
-        # Cargar modelo de embeddings
-        embedding_model_name = os.getenv('EMBEDDING_MODEL_NAME', 'intfloat/multilingual-e5-large-instruct')
-        try:
-            logger.info(f"Intentando cargar modelo de embeddings: {embedding_model_name}")
-            self.embedding_model = SentenceTransformer(embedding_model_name)
-            logger.info(f"Modelo de embeddings cargado: {embedding_model_name}")
-            logger.info(f"Dimensión del modelo: {self.embedding_model.get_sentence_embedding_dimension()}")
-        except Exception as e:
-            logger.warning(f"Error al cargar modelo de embeddings principal: {str(e)}")
-            logger.info("Usando modelo de respaldo con la misma dimensionalidad")
-            self.embedding_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-mpnet-base-v2')
-            logger.info(f"Dimensión del modelo de respaldo: {self.embedding_model.get_sentence_embedding_dimension()}")
+            logger.error(f"Error al inicializar modelo OpenAI: {str(e)}")
+            raise RuntimeError(f"No se pudo inicializar el modelo OpenAI: {str(e)}")
         
         # Inicializar el almacén vectorial
         self.vector_store = self._initialize_vector_store()
 
         # Configurar umbral de similitud
-        self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', '0.1'))
+        self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', '0.3'))
+
+    def _initialize_openai_model(self, model_name: str) -> OpenAIModel:
+        """
+        Inicializa el modelo de OpenAI con fallback.
+        
+        Args:
+            model_name (str): Nombre del modelo principal
+            
+        Returns:
+            OpenAIModel: Modelo inicializado
+        """
+        try:
+            # Intentar inicializar el modelo principal
+            model = OpenAIModel(
+                model_name=model_name,
+                api_key=self.openai_api_key,
+                timeout=self.api_timeout,
+                max_output_tokens=self.max_output_tokens
+            )
+            
+            # Verificar que funciona
+            test_prompt = "Escribe una palabra."
+            model.generate(test_prompt, max_tokens=10)
+            logger.info(f"Modelo OpenAI inicializado correctamente: {model_name}")
+            return model
+            
+        except Exception as e:
+            logger.warning(f"Error al inicializar modelo principal {model_name}: {str(e)}")
+            logger.info(f"Intentando con modelo de fallback: {self.fallback_model_name}")
+            
+            try:
+                # Intentar con el modelo de fallback
+                model = OpenAIModel(
+                    model_name=self.fallback_model_name,
+                    api_key=self.openai_api_key,
+                    timeout=self.api_timeout,
+                    max_output_tokens=self.max_output_tokens
+                )
+                
+                # Verificar que funciona
+                test_prompt = "Escribe una palabra."
+                model.generate(test_prompt, max_tokens=10)
+                logger.info(f"Modelo de fallback OpenAI inicializado correctamente: {self.fallback_model_name}")
+                return model
+                
+            except Exception as e2:
+                raise RuntimeError(f"No se pudo inicializar ningún modelo de OpenAI: {str(e2)}")
 
     def _load_local_model(self, model_path: str):
         """Carga el modelo local con la configuración apropiada"""
@@ -940,90 +1102,26 @@ class RAGSystem:
 
     def generate_response(self, query: str, context: str, sources: List[str] = None) -> str:
         """
-        Genera una respuesta usando el modelo de lenguaje con el prompt mejorado
+        Genera una respuesta usando el modelo de lenguaje.
+        Optimizado para GPT-4o mini para producir respuestas concisas y relevantes.
         """
-        # Determinar el emoji según la intención
-        intent, _ = self._get_query_intent(query)
-        emoji = random.choice({
-            'saludo': greeting_emojis,
-            'pregunta_capacidades': information_emojis,
-            'consulta_administrativa': information_emojis,
-            'consulta_academica': information_emojis,
-            'consulta_medica': medical_emojis,
-            'consulta_reglamento': warning_emojis
-        }.get(intent, information_emojis))
+        # Seleccionar un emoji aleatorio para la respuesta
+        emoji = random.choice(information_emojis)
         
-        # Construir el prompt con el contexto de la intención y las FAQs
-        intent_context = INTENT_EXAMPLES.get(intent, {}).get('context', 'Consulta general')
+        # Construir el prompt sin usar detección de intenciones
         
-        faqs = """
+        # Crear una versión resumida de las FAQ
+        faqs_summary = """
 [PREGUNTAS FRECUENTES]
-1. Constancia de alumno regular:
-   Puedes tramitar la constancia de alumno regular en el Sitio de Inscripciones siguiendo estos pasos:
-   - Paso 1: Ingresar tu DNI y contraseña.
-   - Paso 2: Seleccionar la opción "Constancia de alumno regular" en el inicio de trámites.
-   - Paso 3: Imprimir la constancia. Luego, deberás presentarte con tu Libreta Universitaria o DNI y el formulario impreso (1 hoja que posee 3 certificados de alumno regular) en la ventanilla del Ciclo Biomédico.
-
-2. Baja de materia:
-   El tiempo máximo para dar de baja una materia es:
-   - 2 semanas antes del primer parcial, o
-   - Hasta el 25% de la cursada en asignaturas sin examen parcial.
-   Para dar de baja una materia, sigue estos pasos en el Sitio de Inscripciones:
-   - Paso 1: Ingresar tu DNI y contraseña.
-   - Paso 2: Seleccionar "Baja de asignatura".
-   - Paso 3: Imprimir el certificado de baja. Una vez finalizado el trámite, el estado será "Resuelto Positivamente" y no deberás acudir a la Dirección de Alumnos.
-
-3. Anulación de inscripción a final:
-   Para anular la inscripción a un final, debes acudir a la ventanilla del Ciclo Biomédico presentando el número de constancia generado durante el trámite de inscripción.
-
-4. No lograr inscripción o asignación a materia:
-   Si no logras inscribirte o no te asignan una materia, debes dirigirte a la cátedra o departamento correspondiente y solicitar la inclusión en lista, presentando tu Libreta Universitaria o DNI.
-
-5. Reincorporación:
-   La reincorporación se solicita a través del Sitio de Inscripciones, seleccionando la opción "Reincorporación a la carrera":
-   - Para la 1ª reincorporación: El trámite es automático y aparece resuelto positivamente en el sistema, sin necesidad de trámite en ventanilla.
-   - Si ya fuiste reincorporado anteriormente: Debes realizar el trámite, imprimirlo (consta de 2 hojas: 1 certificado y 1 constancia) y presentarlo en la ventanilla del Ciclo Biomédico, donde la Comisión de Readmisión resolverá tu caso.
-
-6. Recursada (inscripción por segunda vez):
-   Para solicitar una recursada, genera el trámite en el Sitio de Inscripciones siguiendo estos pasos:
-   - Paso 1: Ingresar tu DNI y contraseña.
-   - Paso 2: Seleccionar "Recursada".
-   El trámite es automático y, si aparece resuelto positivamente en el sistema, no necesitas acudir a ventanilla.
-   - Si en el sistema apareces como dado DE BAJA en la cursada anterior, solo debes generar el trámite y te inscribirás como la primera vez, sin abonar arancel.
-   - Si no apareces dado DE BAJA, deberás:
-     1. Realizar el trámite.
-     2. Generar e imprimir el talón de pago.
-     3. Pagar en la Dirección de Tesorería.
-     4. Presentar un comprobante de pago en los buzones del Ciclo Biomédico.
-
-7. Tercera cursada:
-   Para solicitar la tercera cursada, sigue estos pasos en el Sitio de Inscripciones:
-   - Paso 1: Ingresar tu DNI y contraseña.
-   - Paso 2: Seleccionar "3º Cursada".
-   - Paso 3: Imprimir la constancia y el certificado.
-   Luego:
-   - Si figuras como dado DE BAJA en las dos cursadas anteriores, te inscribes como si fuera la primera vez sin abonar arancel.
-   - Si no, debes:
-     1. Realizar el trámite.
-     2. Generar e imprimir el talón de pago.
-     3. Pagar en la Dirección de Tesorería.
-     4. Presentar un comprobante de pago en el buzón del Ciclo Biomédico.
-
-8. Cuarta cursada o más:
-   Para la cuarta cursada o más, genera el trámite en el Sitio de Inscripciones con los siguientes pasos:
-   - Paso 1: Dirigirte a Inscripciones.
-   - Paso 2: Ingresar tu DNI y contraseña.
-   - Paso 3: Seleccionar "4º Cursada o más".
-   - Paso 4: Imprimir la constancia y el certificado.
-   Luego, deberás presentarte con tu Libreta Universitaria y las constancias impresas en la ventanilla del Ciclo Biomédico y acudir a la Dirección de Alumnos.
-
-9. Prórroga de materias:
-   Para solicitar la prórroga de una asignatura, sigue estos pasos en el Sitio de Inscripciones:
-   - Paso 1: Dirigirte a Inscripciones.
-   - Paso 2: Ingresar tu DNI y contraseña.
-   - Paso 3: Seleccionar "Prórroga de asignatura".
-   - Paso 4: Imprimir la constancia.
-   Si se trata de la primera o segunda prórroga, el trámite se resuelve positivamente. Si es la tercera o una prórroga superior, deberás presentar la constancia impresa junto con tu Libreta Universitaria en la ventanilla del Ciclo Biomédico.
+- Constancia de alumno regular: Generar en Sitio de Inscripciones, imprimir y presentar.
+- Baja de materia: Hasta 2 semanas antes del parcial. Seleccionar "Baja de asignatura" en Sitio de Inscripciones.
+- Anulación de inscripción a final: Presentar en ventanilla el número de constancia.
+- Inscripción o asignación fallida: Dirigirse a la cátedra con Libreta o DNI.
+- Reincorporación: Gestionar por Sitio de Inscripciones.
+- Recursada: Seleccionar "Recursada" en Sitio de Inscripciones.
+- Tercera cursada: Seleccionar "3º Cursada" en Sitio de Inscripciones.
+- Cuarta cursada o más: Seleccionar "4º Cursada o más" en Sitio de Inscripciones.
+- Prórroga de materias: Seleccionar "Prórroga de asignatura" en Sitio de Inscripciones.
 """
 
         # Solo incluir las fuentes en el prompt si no son nulas y la lista no está vacía
@@ -1032,49 +1130,84 @@ class RAGSystem:
             formatted_sources = [self._format_source_name(src) for src in sources]
             sources_text = f"\nFUENTES CONSULTADAS:\n{', '.join(formatted_sources)}"
 
-        # Prompt mejorado siguiendo las mejores prácticas para Mistral-7B-Instruct-v0.3
-        prompt = f"""[INST]
-Como DrCecim, asistente virtual especializado de la Facultad de Medicina UBA:
+        # Prompt optimizado para OpenAI
+        system_message = f"""Eres DrCecim, asistente virtual especializado de la Facultad de Medicina UBA. Tu tarea es proporcionar respuestas breves, precisas y útiles.
 
-CONTEXTO DE LA CONSULTA:
-{intent_context}
+SOBRE TI:
+- Te llamas DrCecim y eres un asistente virtual de la Facultad de Medicina UBA
+- Fuiste creado para ayudar a responder preguntas sobre trámites, reglamentos y procedimientos
+- Cuando te pregunten sobre tu identidad, debes responder que eres DrCecim
+- No confundas preguntas sobre tu identidad con preguntas sobre la identidad del usuario
 
-INFORMACIÓN RELEVANTE RECUPERADA DE DOCUMENTOS OFICIALES:
+INFORMACIÓN RELEVANTE:
 {context}
 
-PREGUNTAS FRECUENTES DE REFERENCIA:
-{faqs}
+PREGUNTAS FRECUENTES:
+{faqs_summary}
 
-{sources_text}
+{sources_text}"""
 
-CONSULTA DEL USUARIO:
-{query}
+        user_message = f"""CONSULTA: {query}
 
-INSTRUCCIONES PARA RESPONDER:
-1. PRIORIDAD MÁXIMA: Si encuentras información relevante en la sección "INFORMACIÓN RELEVANTE", úsala como base principal para tu respuesta. Esta información proviene de documentos oficiales y es la más autorizada.
+RESPONDE SIGUIENDO ESTAS REGLAS:
+1. Sé muy conciso y directo.
+2. Usa la información de los documentos oficiales primero.
+3. Si hay documentos específicos, cita naturalmente su origen ("Según el reglamento...").
+4. NO uses NUNCA formato Markdown (como asteriscos para negrita o cursiva) ya que esto no se procesa correctamente en WhatsApp.
+5. Para enfatizar texto, usa MAYÚSCULAS o comillas, pero NUNCA asteriscos.
+6. Usa viñetas con guiones (-) cuando sea útil para mayor claridad.
+7. Si la información está incompleta, sugiere contactar a alumnos@fmed.uba.ar sin usar asteriscos.
+8. No hagas preguntas adicionales."""
 
-2. Si la consulta coincide con alguna pregunta frecuente y no hay información relevante en los documentos, proporciona la respuesta de las FAQ.
+        # Llamada a la API de OpenAI con mensajes formatados
+        if isinstance(self.model, OpenAIModel):
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ]
+            
+            try:
+                # Obtener parámetros de generación de variables de entorno
+                temperature = float(os.getenv('TEMPERATURE', '0.7'))
+                top_p = float(os.getenv('TOP_P', '0.9'))
+                
+                response = openai.chat.completions.create(
+                    model=self.model.model_name,
+                    messages=messages,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_tokens=self.max_output_tokens,
+                    timeout=self.api_timeout
+                )
+                response_text = response.choices[0].message.content.strip()
+            except Exception as e:
+                logger.error(f"Error al generar respuesta con OpenAI: {str(e)}")
+                # Intentar con generación estándar como fallback
+                prompt = f"{system_message}\n\n{user_message}"
+                response_text = self.model.generate(prompt)
+        else:
+            # Fallback a método estándar (no debería ocurrir con la configuración actual)
+            prompt = f"{system_message}\n\n{user_message}"
+            response_text = self.model.generate(
+                prompt, 
+                temperature=float(os.getenv('TEMPERATURE', '0.7')),
+                top_p=float(os.getenv('TOP_P', '0.9')),
+                top_k=int(os.getenv('TOP_K', '50')),
+                max_tokens=self.max_output_tokens
+            )
 
-3. Cuando uses información de los documentos oficiales, menciona naturalmente la fuente en el contexto de tu respuesta:
-   * "Según el reglamento vigente, ..."
-   * "De acuerdo con la normativa universitaria, ..."
-   * "La normativa establece que ..."
+        # Eliminar cualquier formato Markdown que pueda haberse colado
+        response_text = re.sub(r'\*\*(.+?)\*\*', r'\1', response_text)  # Eliminar negrita
+        response_text = re.sub(r'\*(.+?)\*', r'\1', response_text)  # Eliminar cursiva
+        response_text = re.sub(r'\_\_(.+?)\_\_', r'\1', response_text)  # Eliminar subrayado
+        response_text = re.sub(r'\_(.+?)\_', r'\1', response_text)  # Eliminar cursiva con guiones bajos
 
-4. Si la información disponible es parcial o incompleta, proporciona lo que sabes y sugiere dónde obtener información adicional (ej. Departamento de Alumnos, Secretaría Académica).
-
-5. Mantén un tono institucional pero amigable. Estructura tu respuesta de forma clara usando viñetas o numeración cuando sea apropiado.
-
-6. No agregues información que no esté en las fuentes proporcionadas.
-
-7. No hagas preguntas adicionales al usuario.
-
-8. Si es una consulta médica, deriva al profesional.
-
-9. Incluye el emoji correspondiente al inicio de la respuesta.
-[/INST]"""
-
-        response = self.model.generate(prompt)
-        return f"{emoji} {response}"
+        # Asegurar que la respuesta tenga el emoji (si no comienza ya con uno)
+        emoji_pattern = r'[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]'
+        if not re.match(emoji_pattern, response_text.strip()[0:1]):
+            response_text = f"{emoji} {response_text}"
+        
+        return response_text
 
     def _handle_medical_query(self) -> str:
         """
@@ -1273,7 +1406,8 @@ INSTRUCCIONES:
 
     def process_query(self, query: str, user_id: str = None, user_name: str = None) -> Dict[str, Any]:
         """
-        Procesa una consulta utilizando el nuevo sistema de clasificación semántica
+        Procesa una consulta del usuario sin depender de detección de intenciones.
+        La comprensión de la consulta se delega al modelo de lenguaje.
         
         Args:
             query (str): La consulta del usuario
@@ -1281,258 +1415,112 @@ INSTRUCCIONES:
             user_name (str, optional): Nombre del usuario si está disponible
         """
         try:
-            # Determinar la intención
-            intent, confidence = self._get_query_intent(query)
-            logger.info(f"Intención detectada: {intent} (confianza: {confidence:.2f})")
+            # Normalizar la consulta
+            query_original = query
+            query = query.lower().strip()
+            query = unidecode(query)  # Eliminar tildes
+            query = re.sub(r'[^\w\s]', '', query)  # Eliminar signos de puntuación
+            query = re.sub(r'\s+', ' ', query).strip()  # Normalizar espacios
             
-            # Nuevo: Mecanismo de fallback para confianza moderada
-            confidence_threshold = 0.90  # Umbral ajustable
-            should_try_rag = False
+            if query_original != query:
+                logger.info(f"Consulta normalizada: '{query_original}' → '{query}'")
             
-            # Verificar si la confianza es baja y no es una intención conversacional básica
-            if confidence < confidence_threshold and intent not in ['saludo', 'cortesia', 'agradecimiento', 'referencia_anterior', 'pregunta_nombre']:
-                logger.info(f"Confianza moderada ({confidence:.2f}), intentando RAG como fallback")
-                should_try_rag = True
-                
-            # Si es una referencia a un mensaje anterior
-            if intent == 'referencia_anterior':
-                if not user_id or not self.get_user_history(user_id):
-                    response = "Lo siento, no tengo mensajes previos para resumir. ¿Puedes hacerme una pregunta específica?"
-                else:
-                    response = self._summarize_previous_message(user_id)
-                
-                # Actualizar historial
-                if user_id:
-                    self.update_user_history(user_id, query, response)
-                    
+            # Verificar si es una consulta muy corta o de saludo simple
+            if len(query.split()) <= 2 and any(saludo in query for saludo in ['hola', 'buenas', 'saludos', 'hey']):
+                # Respuesta de saludo simple
                 return {
-                    "query": query,
-                    "response": response,
-                    "query_type": intent,
-                    "confidence": confidence,
+                    "query": query_original,
+                    "response": f"{random.choice(greeting_emojis)} ¡Hola! Soy DrCecim, un asistente virtual de la Facultad de Medicina de la UBA. Estoy aquí para ayudarte con trámites y consultas. ¿En qué puedo asistirte hoy?",
+                    "query_type": "saludo",
                     "relevant_chunks": [],
                     "sources": []
                 }
             
-            # Si es una pregunta sobre el nombre
-            if intent == 'pregunta_nombre':
-                if user_name:
-                    # Lista de respuestas amigables sobre cómo sabemos el nombre
-                    name_responses = [
-                        f"¡Tu nombre es {user_name}! Lo veo en tu perfil de WhatsApp 😊",
-                        f"Me aparece {user_name} en tu perfil de WhatsApp. ¡Un gusto conocerte! 👋",
-                        f"¡Te llamas {user_name}! Lo sé porque está en tu perfil de WhatsApp 🤓",
-                        f"Puedo ver que te llamas {user_name} por la info de tu perfil. ¡Es un placer! 🌟",
-                        f"Tu nombre de perfil es {user_name}. ¡Así es como puedo saludarte personalmente! 😊"
-                    ]
-                    response = random.choice(name_responses)
-                else:
-                    response = "Lo siento, en este momento no puedo ver tu nombre en el perfil 😅"
-                
-                return {
-                    "query": query,
-                    "response": response,
-                    "query_type": intent,
-                    "confidence": confidence,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
+            # Obtener chunks relevantes
+            num_chunks = int(os.getenv('RAG_NUM_CHUNKS', 3))
+            relevant_chunks = self.retrieve_relevant_chunks(query_original, k=num_chunks)
             
-            # Si es un saludo y tenemos el nombre, personalizar la respuesta
-            if intent == 'saludo' and user_name:
-                greeting_response = f"{random.choice(greeting_emojis)} ¡Hola {user_name}! Soy DrCecim, el asistente virtual de la Facultad de Medicina. ¿En qué puedo ayudarte?"
-                return {
-                    "query": query,
-                    "response": greeting_response,
-                    "query_type": intent,
-                    "confidence": confidence,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
-            
-            # Si es un agradecimiento, dar una respuesta alegre
-            if intent == 'agradecimiento':
-                response = self._generate_conversational_response(query, intent, user_name)
-                return {
-                    "query": query,
-                    "response": response,
-                    "query_type": intent,
-                    "confidence": confidence,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
-            
-            # Primero verificar si la consulta corresponde a una FAQ
-            response = self._check_faqs(query)
-            if response and not should_try_rag:
-                # Si tenemos el nombre y es la primera interacción, personalizamos
-                if user_name and not self.get_user_history(user_id):
-                    response = f"¡Hola {user_name}! {response}"
-                
-                logger.info("Consulta respondida desde FAQs")
-                return {
-                    "query": query,
-                    "response": response,
-                    "query_type": "faq",
-                    "confidence": 1.0,
-                    "relevant_chunks": [],
-                    "sources": []  # No incluimos fuentes para FAQs
-                }
-            
-            # Si no es una FAQ, o should_try_rag es True, continuar con el proceso normal
-            # Modificación: cambiar la condición para incluir should_try_rag
-            if should_try_rag or intent not in ['saludo', 'pregunta_capacidades', 'identidad', 'cortesia']:
-                # Establecer el número de chunks según el tipo de consulta
-                num_chunks = {
-                    'consulta_reglamento': 5,  # Más chunks para consultas de reglamento
-                    'consulta_academica': 4,
-                    'consulta_administrativa': 3,
-                    'consulta_general': 3
-                }.get(intent, 3)  # Default a 3 si el tipo no está en el diccionario
-                
-                logger.info(f"Procesando consulta RAG: {query}")
-                
-                # Encontrar fragmentos relevantes
+            # Si no hay resultados relevantes, intentar con la consulta normalizada
+            if not relevant_chunks:
                 relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
+            
+            # Si aún no hay resultados, reducir el umbral de similitud temporalmente
+            if not relevant_chunks:
+                logger.info("Intentando búsqueda con umbral reducido...")
+                original_threshold = self.similarity_threshold
+                self.similarity_threshold = 0.1  # Reducir temporalmente el umbral
+                relevant_chunks = self.retrieve_relevant_chunks(query_original, k=num_chunks)
+                self.similarity_threshold = original_threshold  # Restaurar umbral
+            
+            # Construir contexto con los chunks relevantes
+            context_chunks = []
+            sources = []
+            
+            for chunk in relevant_chunks:
+                # Extraer el contenido del chunk
+                if "content" in chunk and chunk["content"].strip():
+                    content = chunk["content"]
+                elif "text" in chunk and chunk["text"].strip():
+                    content = chunk["text"]
+                else:
+                    continue
                 
-                # Verificar si se encontraron chunks relevantes
-                if not relevant_chunks:
-                    logger.warning("No se encontraron chunks relevantes para la consulta.")
-                    
-                    # Verificar si la consulta es sobre sanciones o agresiones
-                    if intent == 'consulta_reglamento' or 'denuncia' in query.lower() or 'sancion' in query.lower():
-                        # Intentar una nueva búsqueda con umbral más bajo
-                        logger.info("Intentando búsqueda específica con umbral reducido...")
-                        self.similarity_threshold = 0.1  # Reducir temporalmente el umbral
-                        relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
-                        self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', 0.3))  # Restaurar umbral
-                    
-                    if not relevant_chunks:
-                        # Si aún no hay chunks relevantes, intentar responder conversacionalmente
-                        if intent in ['saludo', 'pregunta_capacidades', 'identidad']:
-                            response = self._generate_conversational_response(query, intent, user_name)
-                            return {
-                                "query": query,
-                                "response": response,
-                                "query_type": intent,
-                                "confidence": confidence,
-                                "relevant_chunks": [],
-                                "sources": []
-                            }
-                        else:
-                            emoji = random.choice(information_emojis)
-                            standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
-                        
-                            return {
-                                "query": query,
-                                "response": standard_no_info_response,
-                                "relevant_chunks": [],
-                                "sources": [],
-                                "query_type": intent,
-                                "confidence": confidence
-                            }
+                # Extraer la fuente
+                source = ""
+                if "filename" in chunk and chunk["filename"]:
+                    source = os.path.basename(chunk["filename"]).replace('.pdf', '')
+                    if source and source not in sources:
+                        sources.append(source)
                 
-                # Construir contexto
-                context_chunks = []
-                sources = []
-                
-                for chunk in relevant_chunks:
-                    if "content" in chunk and chunk["content"].strip():
-                        content = chunk["content"]
-                    elif "text" in chunk and chunk["text"].strip():
-                        content = chunk["text"]
-                    else:
-                        continue
-                    
-                    source = ""
-                    if "filename" in chunk and chunk["filename"]:
-                        source = os.path.basename(chunk["filename"]).replace('.pdf', '')
-                        if source and source not in sources:
-                            sources.append(source)
-                    
-                    formatted_chunk = f"Información de {source}:\n{content}"
-                    context_chunks.append(formatted_chunk)
-                    logger.info(f"Agregado chunk relevante de {source}")
-                
-                # Unir los chunks para formar el contexto
-                context = '\n\n'.join(context_chunks)
-                
-                if not context.strip():
-                    logger.warning("No se encontró contexto suficientemente relevante")
-                    emoji = random.choice(information_emojis)
-                    standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
-                    
-                    return {
-                        "query": query,
-                        "response": standard_no_info_response,
-                        "relevant_chunks": [],
-                        "sources": [],
-                        "query_type": intent,
-                        "confidence": confidence
-                    }
-                
-                logger.info(f"Se encontraron {len(context_chunks)} fragmentos relevantes de {len(sources)} fuentes")
-                
-                # Generar respuesta inicial
-                response = self.generate_response(query, context, sources)
-                
-                # Verificar calidad de la respuesta
-                verified_response, verification_score = self._verify_response(response, context, intent)
-                logger.info(f"Verificación de respuesta completada (score: {verification_score:.2f})")
-                
-                # Si la verificación indica baja calidad, intentar regenerar
-                if verification_score < 0.7:
-                    logger.warning("Baja calidad de respuesta detectada, intentando regenerar...")
-                    response = self.generate_response(query, context, sources)
-                    verified_response, verification_score = self._verify_response(response, context, intent)
-                
-                # Calcular confianza final
-                final_confidence = (confidence + verification_score) / 2
-                
-                # Actualizar historial del usuario
-                if user_id:
-                    self.update_user_history(user_id, query, response)
+                formatted_chunk = f"Información de {source}:\n{content}"
+                context_chunks.append(formatted_chunk)
+                logger.info(f"Agregado chunk relevante de {source}")
+            
+            # Unir los chunks para formar el contexto
+            context = '\n\n'.join(context_chunks)
+            
+            # Si no hay contexto suficiente, dar una respuesta genérica
+            if not context.strip():
+                logger.warning("No se encontró contexto suficientemente relevante")
+                emoji = random.choice(information_emojis)
+                standard_no_info_response = f"{emoji} Lo siento, no encontré información específica sobre esta consulta en mis documentos. Te sugiero escribir a **alumnos@fmed.uba.ar** para obtener la información precisa que necesitas."
                 
                 return {
-                    "query": query,
-                    "response": verified_response,
-                    "relevant_chunks": relevant_chunks,
-                    "sources": sources,
-                    "query_type": intent,
-                    "confidence": final_confidence
-                }
-            else:
-                # Para intenciones conversacionales (saludo, pregunta_capacidades, identidad, cortesia)
-                response = self._generate_conversational_response(query, intent, user_name)
-                return {
-                    "query": query,
-                    "response": response,
-                    "query_type": intent,
-                    "confidence": confidence,
+                    "query": query_original,
+                    "response": standard_no_info_response,
                     "relevant_chunks": [],
-                    "sources": []
+                    "sources": [],
+                    "query_type": "sin_información"
                 }
             
-            # Manejar consultas médicas
-            if intent == 'consulta_medica':
-                return {
-                    "query": query,
-                    "response": self._handle_medical_query(),
-                    "query_type": intent,
-                    "confidence": confidence,
-                    "relevant_chunks": [],
-                    "sources": []
-                }
-                
+            logger.info(f"Se encontraron {len(context_chunks)} fragmentos relevantes de {len(sources)} fuentes")
+            
+            # Generar respuesta
+            response = self.generate_response(query_original, context, sources)
+            
+            # Actualizar historial del usuario
+            if user_id:
+                self.update_user_history(user_id, query_original, response)
+            
+            # Devolver respuesta
+            return {
+                "query": query_original,
+                "response": response,
+                "relevant_chunks": relevant_chunks,
+                "sources": sources,
+                "query_type": "consulta_general"
+            }
+            
         except Exception as e:
             logger.error(f"Error en process_query: {str(e)}", exc_info=True)
-            error_response = f"👨‍⚕️ Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
+            emoji = random.choice(warning_emojis)
+            error_response = f"{emoji} Lo siento, ocurrió un problema al procesar tu consulta. Por favor, inténtalo de nuevo o contacta a **alumnos@fmed.uba.ar** si el problema persiste."
+            
             return {
                 "query": query,
                 "response": error_response,
                 "error": str(e),
-                "query_type": "error",
-                "confidence": 0.0
+                "query_type": "error"
             }
 
     def _check_faqs(self, query: str) -> Optional[str]:
