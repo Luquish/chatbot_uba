@@ -2,11 +2,9 @@ import os
 import logging
 import json
 import requests
-from pathlib import Path
-from typing import Dict, Optional, Union, Any
-from fastapi import FastAPI, HTTPException, Request, Depends
+from typing import Dict, Any
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from dotenv import load_dotenv
 from run_rag import RAGSystem
 import uvicorn

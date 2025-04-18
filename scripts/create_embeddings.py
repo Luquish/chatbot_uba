@@ -1,13 +1,12 @@
 import os
 import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List
 import pandas as pd
 import numpy as np
 import faiss
 import json
 import ast
-from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 from dotenv import load_dotenv
 import openai
@@ -26,32 +25,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Determinar el entorno (desarrollo o producción)
-ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
-logger.info(f"Iniciando generación de embeddings en entorno: {ENVIRONMENT}")
-
 # Configuración de OpenAI
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OPENAI_EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
 
 logger.info(f"OPENAI_API_KEY configurada: {'Sí' if OPENAI_API_KEY else 'No'}")
 logger.info(f"Modelo de embeddings: {OPENAI_EMBEDDING_MODEL}")
-
-# Importaciones condicionales para Pinecone (solo en producción)
-if ENVIRONMENT == 'production':
-    try:
-        import pinecone
-        PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
-        PINECONE_ENVIRONMENT = os.getenv('PINECONE_ENVIRONMENT')
-        PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', 'uba-chatbot-embeddings')
-        if not all([PINECONE_API_KEY, PINECONE_ENVIRONMENT]):
-            logger.warning("Falta configuración de Pinecone. Se usará FAISS local.")
-            ENVIRONMENT = 'development'
-        else:
-            logger.info("Usando Pinecone para almacenamiento de embeddings en producción.")
-    except ImportError:
-        logger.warning("No se pudo importar pinecone. Se usará FAISS local.")
-        ENVIRONMENT = 'development'
 
 class OpenAIEmbedding:
     def __init__(self, model_name: str, api_key: str, timeout: int = 30):
@@ -156,24 +135,6 @@ class EmbeddingGenerator:
         )
         logger.info(f"Dimensión del modelo OpenAI: {self.model.get_sentence_embedding_dimension()}")
         logger.info("OpenAI inicializado correctamente para embeddings")
-        
-        self.is_production = ENVIRONMENT == 'production'
-        
-        # Inicializar Pinecone en entorno de producción
-        if self.is_production:
-            pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
-            
-            # Verificar si el índice existe, si no, crearlo
-            if PINECONE_INDEX_NAME not in pinecone.list_indexes():
-                logger.info(f"Creando índice '{PINECONE_INDEX_NAME}' en Pinecone...")
-                pinecone.create_index(
-                    name=PINECONE_INDEX_NAME,
-                    dimension=self.model.get_sentence_embedding_dimension(),
-                    metric="cosine"
-                )
-            
-            self.pinecone_index = pinecone.Index(PINECONE_INDEX_NAME)
-            logger.info(f"Índice Pinecone inicializado: {PINECONE_INDEX_NAME}")
         
     def load_processed_documents(self) -> pd.DataFrame:
         """
@@ -457,16 +418,11 @@ class EmbeddingGenerator:
             if embeddings.size == 0:
                 raise ValueError("No se generaron embeddings (array vacío)")
             
-            if self.is_production:
-                # Almacenar en Pinecone para producción
-                self.store_in_pinecone(texts, embeddings, filenames, chunk_indices)
-                logger.info(f"Embeddings almacenados en Pinecone ({PINECONE_INDEX_NAME}).")
-            else:
-                # Crear y guardar índice FAISS para desarrollo
-                index = self.create_faiss_index(embeddings)
-                index_path = self.embeddings_dir / 'faiss_index.bin'
-                faiss.write_index(index, str(index_path))
-                logger.info(f"Índice FAISS guardado en {index_path}")
+            # Crear y guardar índice FAISS
+            index = self.create_faiss_index(embeddings)
+            index_path = self.embeddings_dir / 'faiss_index.bin'
+            faiss.write_index(index, str(index_path))
+            logger.info(f"Índice FAISS guardado en {index_path}")
             
             # Guardar metadatos (útil para ambos entornos)
             self.save_metadata(texts, filenames, chunk_indices)
@@ -481,7 +437,7 @@ class EmbeddingGenerator:
                 'model_name': OPENAI_EMBEDDING_MODEL,
                 'dimension': self.model.get_sentence_embedding_dimension(),
                 'num_vectors': len(texts),
-                'environment': ENVIRONMENT,
+                'environment': 'development',
                 'documents': [f for f in df['filename']]
             }
             
@@ -507,7 +463,6 @@ def main():
     
     # Mostrar configuración
     logger.info("=== Configuración de embeddings ===")
-    logger.info(f"Entorno: {ENVIRONMENT}")
     
     if OPENAI_API_KEY:
         logger.info(f"Modelo: OpenAI {OPENAI_EMBEDDING_MODEL}")
@@ -516,11 +471,6 @@ def main():
         logger.error("❌ API Key de OpenAI NO encontrada - Se requiere para el funcionamiento")
         logger.error("El script no puede continuar sin una API Key de OpenAI")
         return
-    
-    if ENVIRONMENT == 'production':
-        logger.info(f"Almacenamiento: Pinecone ({PINECONE_INDEX_NAME})")
-    else:
-        logger.info("Almacenamiento: FAISS local")
     
     logger.info("================================")
     logger.info(f"Iniciando generación de embeddings. Dir procesado: {processed_dir}, Dir embeddings: {embeddings_dir}")

@@ -1,18 +1,11 @@
 import os
 import logging
+import subprocess
 from pathlib import Path
-from typing import List, Dict
+import re
+from typing import List, Dict, Optional, Any, Tuple
 import pandas as pd
 from tqdm import tqdm
-from io import StringIO
-import re
-from pdfminer.high_level import extract_text
-from pdfminer.converter import TextConverter
-from pdfminer.layout import LAParams
-from pdfminer.pdfdocument import PDFDocument
-from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
-from pdfminer.pdfpage import PDFPage
-from pdfminer.pdfparser import PDFParser
 
 # Configuración de logging
 logging.basicConfig(
@@ -21,10 +14,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class DocumentPreprocessor:
+class MarkerPreprocessor:
     def __init__(self, raw_dir: str, processed_dir: str):
         """
-        Inicializa el preprocesador de documentos.
+        Inicializa el preprocesador basado en Marker PDF.
         
         Args:
             raw_dir (str): Directorio con documentos sin procesar
@@ -34,435 +27,27 @@ class DocumentPreprocessor:
         self.processed_dir = Path(processed_dir)
         self.processed_dir.mkdir(parents=True, exist_ok=True)
         
-    def extract_text_from_pdf(self, pdf_path: Path) -> str:
-        """
-        Extrae texto de un archivo PDF usando pdfminer de manera más robusta.
-        
-        Args:
-            pdf_path (Path): Ruta al archivo PDF
-            
-        Returns:
-            str: Texto extraído del PDF
-        """
+        # Verificar que marker esté instalado
         try:
-            logger.info(f"Extrayendo texto de: {pdf_path}")
+            result = subprocess.run(['marker_single', '--help'], 
+                                   stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE, 
+                                   text=True,
+                                   check=False)
             
-            # Método 1: Usar extract_text (más simple pero a veces menos preciso)
-            text = extract_text(pdf_path)
-            
-            # Si el texto está vacío o es muy corto, usar método alternativo
-            if not text or len(text) < 100:
-                logger.warning(f"Primera extracción produjo texto insuficiente, usando método alternativo para {pdf_path}")
+            if result.returncode != 0:
+                logger.error(f"Error al verificar marker_single: {result.stderr}")
+                raise RuntimeError("marker_single no está disponible o no funciona correctamente")
                 
-                # Método 2: Más detallado usando componentes de pdfminer
-                output_string = StringIO()
-                with open(pdf_path, 'rb') as in_file:
-                    parser = PDFParser(in_file)
-                    doc = PDFDocument(parser)
-                    rsrcmgr = PDFResourceManager()
-                    device = TextConverter(rsrcmgr, output_string, laparams=LAParams())
-                    interpreter = PDFPageInterpreter(rsrcmgr, device)
-                    for page in PDFPage.create_pages(doc):
-                        interpreter.process_page(page)
-                
-                text = output_string.getvalue()
-            
-            # Verificación básica
-            if not text:
-                logger.error(f"No se pudo extraer texto de {pdf_path}")
-                return ""
-                
-            logger.info(f"Texto extraído exitosamente: {len(text)} caracteres")
-            return text
-            
-        except Exception as e:
-            logger.error(f"Error al extraer texto de {pdf_path}: {str(e)}")
-            return ""
-
-    def clean_text(self, text: str) -> str:
-        """
-        Limpia el texto extraído de manera más exhaustiva.
-        
-        Args:
-            text (str): Texto a limpiar
-            
-        Returns:
-            str: Texto limpio
-        """
-        if not text:
-            return ""
-            
-        # Eliminar caracteres de control excepto saltos de línea y tabulaciones
-        text = ''.join(char for char in text if char == '\n' or char == '\t' or char.isprintable())
-        
-        # Reemplazar múltiples espacios en blanco por uno solo
-        text = re.sub(r'[ \t]+', ' ', text)
-        
-        # Reemplazar múltiples saltos de línea por uno solo
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        # Eliminar espacios al inicio y final de cada línea
-        lines = [line.strip() for line in text.split('\n')]
-        text = '\n'.join(lines)
-        
-        # Eliminar líneas que solo contengan números o sean muy cortas (menos de 3 caracteres)
-        lines = [line for line in text.split('\n') if len(line) > 3 and not line.strip().isdigit()]
-        text = '\n'.join(lines)
-        
-        return text.strip()
-
-    def convert_to_markdown(self, text: str) -> str:
-        """
-        Convierte el texto extraído del PDF a formato Markdown mejorado para resoluciones universitarias.
-        
-        Args:
-            text (str): Texto extraído del PDF
-            
-        Returns:
-            str: Texto en formato Markdown enriquecido
-        """
-        if not text:
-            return ""
-        
-        # Patrones para identificar estructura específica de resoluciones universitarias
-        title_pattern = re.compile(r'^([A-Z][A-Z\s]{5,})(?:\n|$)')
-        resolution_pattern = re.compile(r'Resolución\s+(?:\([A-Z]+\))?\s*(\d+\/\d+)')
-        article_pattern = re.compile(r'^Art(?:ículo|\.)\s*(\d+\º?)\.?', re.IGNORECASE)
-        section_pattern = re.compile(r'^(?:CAPÍTULO|TÍTULO|SECCIÓN)\s+([IVX\d]+)\.?', re.IGNORECASE)
-        subsection_pattern = re.compile(r'^(?:[a-z]\)|[0-9]+\.|[A-Z]\))', re.IGNORECASE)
-        visto_pattern = re.compile(r'^\s*Visto', re.IGNORECASE)
-        considerando_pattern = re.compile(r'^\s*Considerando:', re.IGNORECASE)
-        resuelve_pattern = re.compile(r'^\s*(?:El\s+Consejo\s+Superior.*?\n\s*)?Resuelve:', re.IGNORECASE)
-        anexo_pattern = re.compile(r'^\s*Anexo\s*$', re.IGNORECASE)
-        inciso_pattern = re.compile(r'^\s*([a-z]\))', re.IGNORECASE)
-        
-        # Separar el texto en líneas para procesamiento
-        lines = text.split('\n')
-        markdown_lines = []
-        in_list = False
-        title_found = False
-        resolution_found = False
-        visto_found = False
-        considerando_found = False
-        resuelve_found = False
-        anexo_found = False
-        rector_line = False
-        
-        # Procesar línea por línea
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # Saltar líneas vacías al inicio
-            if not line and not title_found:
-                i += 1
-                continue
-            
-            # Detectar título principal
-            if not title_found and title_pattern.match(line):
-                markdown_lines.append(f"# {line}")
-                title_found = True
-                i += 1
-                continue
-            
-            # Detectar número de resolución
-            if title_found and not resolution_found and resolution_pattern.search(line):
-                markdown_lines.append(f"**{line}**")
-                resolution_found = True
-                i += 1
-                continue
-            
-            # Detectar sección "Visto"
-            if resolution_found and not visto_found and visto_pattern.match(line):
-                markdown_lines.append("\n_Visto_:")
-                
-                # Capturar todo el texto de "Visto" hasta "Considerando" o "Resuelve"
-                visto_text = []
-                j = i
-                while j < len(lines) and not considerando_pattern.match(lines[j]) and not resuelve_pattern.match(lines[j]):
-                    if lines[j].strip() and not visto_pattern.match(lines[j]):
-                        visto_text.append(lines[j].strip())
-                    j += 1
-                
-                # Formatear el texto "Visto" como lista si es apropiado
-                if any(re.match(r'^-|\d+\)|\([a-z]\)', line) for line in visto_text):
-                    for vt in visto_text:
-                        if re.match(r'^-', vt):
-                            markdown_lines.append(f"- {vt[1:].strip()}")
-                        elif re.match(r'^\d+\)|\([a-z]\)', vt):
-                            markdown_lines.append(f"- {vt}")
-                        else:
-                            markdown_lines.append(f"- {vt}")
-                else:
-                    markdown_lines.append(" ".join(visto_text))
-                
-                markdown_lines.append("\n---\n")
-                visto_found = True
-                i = j
-                continue
-            
-            # Detectar sección "Considerando"
-            if (resolution_found or visto_found) and not considerando_found and considerando_pattern.match(line):
-                markdown_lines.append("**Considerando:**\n")
-                
-                # Capturar todo el considerando hasta "Resuelve"
-                considerando_text = []
-                j = i + 1
-                while j < len(lines) and not resuelve_pattern.match(lines[j]):
-                    if lines[j].strip() and not "El Consejo Superior" in lines[j]:
-                        # Verificar si es un "Que" inicial para formato de lista
-                        if lines[j].strip().startswith("Que") or lines[j].strip().startswith("que"):
-                            considerando_text.append(f"- {lines[j].strip()}")
-                        else:
-                            considerando_text.append(lines[j].strip())
-                    j += 1
-                
-                # Formatear el considerando como texto normal o lista según corresponda
-                for ct in considerando_text:
-                    markdown_lines.append(ct)
-                
-                considerando_found = True
-                i = j - 1  # Retroceder uno para que el próximo ciclo capture "Resuelve"
-                i += 1
-                continue
-            
-            # Detectar línea "El Consejo Superior" antes de Resuelve
-            if not resuelve_found and "El Consejo Superior" in line:
-                markdown_lines.append(f"\n**{line}**\n")
-                i += 1
-                continue
-            
-            # Detectar sección "Resuelve"
-            if (visto_found or considerando_found or resolution_found) and not resuelve_found and resuelve_pattern.match(line):
-                markdown_lines.append("\n---\n")
-                markdown_lines.append("## Resuelve:\n")
-                resuelve_found = True
-                i += 1
-                continue
-            
-            # Detectar sección "Anexo"
-            if not anexo_found and anexo_pattern.match(line):
-                markdown_lines.append("\n---\n")
-                markdown_lines.append("## Anexo\n")
-                anexo_found = True
-                i += 1
-                continue
-            
-            # Detectar artículos
-            article_match = article_pattern.match(line)
-            if article_match:
-                # Terminar lista anterior si existía
-                if in_list:
-                    in_list = False
-                    markdown_lines.append("")
-                
-                # Agregar artículo con formato
-                markdown_lines.append(f"### {line}")
-                
-                # Capturar todo el contenido del artículo hasta el próximo artículo
-                j = i + 1
-                article_content = []
-                while j < len(lines) and not article_pattern.match(lines[j].strip()) and not anexo_pattern.match(lines[j].strip()):
-                    if lines[j].strip():
-                        article_content.append(lines[j].strip())
-                    j += 1
-                
-                # Procesar el contenido del artículo
-                if article_content:
-                    # Verificar si tiene incisos
-                    has_incisos = any(inciso_pattern.match(line) for line in article_content)
-                    
-                    if has_incisos:
-                        # Formatear incisos como lista con viñetas
-                        current_text = ""
-                        for ac in article_content:
-                            inciso_match = inciso_pattern.match(ac)
-                            if inciso_match:
-                                # Si hay texto previo, añadirlo
-                                if current_text:
-                                    markdown_lines.append(current_text)
-                                    current_text = ""
-                                
-                                # Añadir el inciso formateado
-                                markdown_lines.append(f"- **{inciso_match.group(1)}** {ac[inciso_match.end():].strip()}")
-                            else:
-                                # Acumular texto normal o añadirlo a la última viñeta
-                                if markdown_lines and markdown_lines[-1].startswith("- **"):
-                                    markdown_lines[-1] += f" {ac}"
-                                else:
-                                    current_text += f" {ac}"
-                        
-                        # Añadir el texto final si quedó algo
-                        if current_text.strip():
-                            markdown_lines.append(current_text.strip())
-                    else:
-                        # Añadir como texto normal
-                        markdown_lines.append(" ".join(article_content))
-                
-                markdown_lines.append("")  # Espacio después del artículo
-                i = j
-                continue
-            
-            # Detectar firma del rector
-            if "Rector" in line and "Shuberoff" in line:
-                markdown_lines.append(f"\n**{line}**")
-                rector_line = True
-                i += 1
-                continue
-            
-            # Procesar líneas normales
-            if line:
-                # Si es una línea vacía, mantener el formato
-                if not in_list:
-                    markdown_lines.append(line)
-                else:
-                    # Estamos en una lista, intentar mantener formato de lista
-                    if subsection_pattern.match(line):
-                        markdown_lines.append(f"- {line}")
-                    else:
-                        markdown_lines.append(line)
-                        in_list = False
-            else:
-                # Mantener líneas en blanco para preservar formato
-                markdown_lines.append("")
-            
-            i += 1
-        
-        # Eliminar líneas en blanco repetidas
-        clean_markdown = []
-        prev_empty = False
-        for line in markdown_lines:
-            if not line.strip():
-                if not prev_empty:
-                    clean_markdown.append("")
-                    prev_empty = True
-            else:
-                clean_markdown.append(line)
-                prev_empty = False
-        
-        return "\n".join(clean_markdown)
-
-    def split_into_chunks(self, text: str, filename: str, chunk_size: int = 250, overlap: int = 50) -> List[str]:
-        if not text:
-            return []
-        
-        # Patrones para identificar estructura del documento
-        article_pattern = re.compile(r'(?i)(?:^|\n)(?:Art(?:ículo|\.)\s*\d+\º?\.?)', re.MULTILINE)
-        section_pattern = re.compile(r'(?i)(?:^|\n)(?:CAPÍTULO|TÍTULO|SECCIÓN)\s+[IVX\d]+\.?', re.MULTILINE)
-        subsection_pattern = re.compile(r'(?i)(?:^|\n)(?:[a-z]\)|[0-9]+\.|[A-Z]\))', re.MULTILINE)
-        
-        # Primero dividir por artículos
-        chunks = []
-        article_matches = list(article_pattern.finditer(text))
-        
-        if not article_matches:
-            # Si no hay artículos, tratar todo el texto como un chunk
-            if len(text.split()) <= chunk_size:
-                doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                chunks.append(doc_prefix + text)
-            else:
-                # Dividir por párrafos
-                paragraphs = text.split('\n\n')
-                current_chunk = []
-                current_size = 0
-                
-                for paragraph in paragraphs:
-                    words = paragraph.split()
-                    if current_size + len(words) <= chunk_size:
-                        current_chunk.append(paragraph)
-                        current_size += len(words)
-                    else:
-                        if current_chunk:
-                            doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                            chunks.append(doc_prefix + '\n\n'.join(current_chunk))
-                        current_chunk = [paragraph]
-                        current_size = len(words)
-                
-                if current_chunk:
-                    doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                    chunks.append(doc_prefix + '\n\n'.join(current_chunk))
-        else:
-            # Procesar cada artículo
-            for i, match in enumerate(article_matches):
-                start = match.start()
-                end = article_matches[i + 1].start() if i + 1 < len(article_matches) else len(text)
-                article_text = text[start:end].strip()
-                
-                # Dividir el artículo en subsecciones si es necesario
-                subsections = []
-                current_subsection = []
-                
-                for line in article_text.split('\n'):
-                    if subsection_pattern.match(line) and current_subsection:
-                        subsections.append('\n'.join(current_subsection))
-                        current_subsection = []
-                    current_subsection.append(line)
-                
-                if current_subsection:
-                    subsections.append('\n'.join(current_subsection))
-                
-                if not subsections:
-                    subsections = [article_text]
-                
-                # Procesar cada subsección
-                for subsection in subsections:
-                    words = subsection.split()
-                    if len(words) <= chunk_size:
-                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                        chunks.append(doc_prefix + subsection)
-                    else:
-                        # Dividir subsección grande en chunks más pequeños
-                        current_chunk = []
-                        current_size = 0
-                        
-                        for word in words:
-                            current_chunk.append(word)
-                            current_size += 1
-                            
-                            if current_size >= chunk_size:
-                                # Buscar un punto final cercano
-                                look_back = min(10, len(current_chunk))
-                                cut_point = -1
-                                
-                                for j in range(look_back):
-                                    if current_chunk[-j-1].endswith('.'):
-                                        cut_point = len(current_chunk) - j - 1
-                                        break
-                                
-                                if cut_point == -1:
-                                    cut_point = len(current_chunk)
-                                
-                                doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                                chunks.append(doc_prefix + ' '.join(current_chunk[:cut_point]))
-                                
-                                # Mantener palabras para contexto
-                                current_chunk = current_chunk[max(0, cut_point-overlap):]
-                                current_size = len(current_chunk)
-                        
-                        if current_chunk:
-                            doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                            chunks.append(doc_prefix + ' '.join(current_chunk))
-        
-        # Post-procesamiento para evitar chunks muy pequeños
-        processed_chunks = []
-        min_chunk_size = 50  # palabras
-        
-        for i, chunk in enumerate(chunks):
-            chunk_words = chunk.split()
-            if len(chunk_words) < min_chunk_size and i > 0:
-                # Combinar chunks pequeños con el anterior
-                previous_chunk = processed_chunks[-1]
-                combined_chunk = previous_chunk + " " + chunk
-                processed_chunks[-1] = combined_chunk
-            else:
-                processed_chunks.append(chunk)
-        
-        logger.info(f"Documento dividido en {len(processed_chunks)} chunks")
-        return processed_chunks
-
+            logger.info("Marker detectado correctamente en el sistema")
+        except FileNotFoundError:
+            logger.error("No se encontró el comando marker_single")
+            logger.error("Asegúrate de que marker-pdf esté instalado: pip install marker-pdf")
+            raise RuntimeError("Marker no está instalado correctamente")
+    
     def process_document(self, pdf_path: Path) -> Dict:
         """
-        Procesa un documento PDF y lo convierte a Markdown.
+        Procesa un documento PDF usando Marker y lo convierte a Markdown.
         
         Args:
             pdf_path (Path): Ruta al archivo PDF
@@ -470,31 +55,146 @@ class DocumentPreprocessor:
         Returns:
             Dict: Diccionario con metadatos y chunks del documento
         """
-        logger.info(f"Procesando documento: {pdf_path}")
+        logger.info(f"Procesando documento con Marker: {pdf_path}")
         
-        # Extraer texto del PDF
-        text = self.extract_text_from_pdf(pdf_path)
-        if not text:
-            logger.error(f"No se pudo extraer texto de {pdf_path}")
+        # Crear un subdirectorio específico para este documento
+        output_subdir = self.processed_dir / pdf_path.stem
+        output_subdir.mkdir(exist_ok=True)
+        
+        # Preparar los argumentos para marker_single
+        marker_cmd = [
+            "marker_single",
+            str(pdf_path),
+            "--output_dir", str(output_subdir),
+            "--output_format", "markdown",
+            "--paginate_output",
+            "--force_ocr"
+        ]
+        
+        # Ejecutar marker_single para convertir el PDF a Markdown
+        try:
+            logger.info(f"Ejecutando: {' '.join(marker_cmd)}")
+            result = subprocess.run(
+                marker_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Error al ejecutar marker_single: {result.stderr}")
+                return None
+                
+            logger.info(f"Marker completado exitosamente para {pdf_path.name}")
+            
+        except Exception as e:
+            logger.error(f"Excepción al ejecutar marker_single: {str(e)}")
             return None
         
-        # Limpiar texto
-        clean_text = self.clean_text(text)
+        # Marker crea una subcarpeta con el mismo nombre del archivo que debe eliminarse
+        nested_dir = output_subdir / pdf_path.stem
         
-        # Convertir a Markdown
-        markdown_text = self.convert_to_markdown(clean_text)
+        # Variable para almacenar la ruta al archivo Markdown encontrado
+        markdown_path = output_subdir / f"{pdf_path.stem}.md"
         
-        # Guardar archivo Markdown
-        markdown_path = self.processed_dir / f"{pdf_path.stem}.md"
-        with open(markdown_path, 'w', encoding='utf-8') as f:
-            f.write(markdown_text)
-        logger.info(f"Archivo Markdown guardado en: {markdown_path}")
+        # Verificar si existe la carpeta anidada y manejarla
+        if nested_dir.exists() and nested_dir.is_dir():
+            logger.info(f"Detectada carpeta anidada: {nested_dir}")
+            
+            # 1. Buscar y mover archivos Markdown
+            markdown_files = list(nested_dir.glob("*.md"))
+            if markdown_files:
+                original_markdown_path = markdown_files[0]
+                try:
+                    # Leer el contenido del archivo original
+                    with open(original_markdown_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Escribir el contenido en la ubicación correcta (nivel superior)
+                    with open(markdown_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                        
+                    logger.info(f"Archivo Markdown movido a: {markdown_path}")
+                except Exception as e:
+                    logger.error(f"Error al mover el archivo Markdown: {str(e)}")
+                    return None
+            else:
+                logger.error(f"No se encontraron archivos Markdown en: {nested_dir}")
+                return None
+                
+            # 2. Buscar y mover archivos de metadatos JSON
+            json_files = list(nested_dir.glob(f"{pdf_path.stem}_meta.json"))
+            if json_files:
+                try:
+                    original_json_path = json_files[0]
+                    target_json_path = output_subdir / f"{pdf_path.stem}_meta.json"
+                    
+                    # Leer el contenido del archivo JSON
+                    with open(original_json_path, 'r', encoding='utf-8') as f:
+                        json_content = f.read()
+                    
+                    # Escribir el contenido en la ubicación correcta
+                    with open(target_json_path, 'w', encoding='utf-8') as f:
+                        f.write(json_content)
+                        
+                    logger.info(f"Archivo de metadatos movido a: {target_json_path}")
+                except Exception as e:
+                    logger.error(f"Error al mover el archivo de metadatos: {str(e)}")
+            
+            # 3. Mover las imágenes si existen
+            nested_images_dir = nested_dir / "images"
+            if nested_images_dir.exists() and nested_images_dir.is_dir():
+                output_images_dir = output_subdir / "images"
+                output_images_dir.mkdir(exist_ok=True)
+                
+                try:
+                    # Mover todas las imágenes
+                    for img_file in nested_images_dir.glob("*"):
+                        target_img_path = output_images_dir / img_file.name
+                        with open(img_file, 'rb') as src, open(target_img_path, 'wb') as dst:
+                            dst.write(src.read())
+                    logger.info(f"Imágenes movidas a: {output_images_dir}")
+                except Exception as e:
+                    logger.error(f"Error al mover imágenes: {str(e)}")
+            
+            # 4. Eliminar completamente la carpeta anidada para evitar confusiones
+            try:
+                import shutil
+                shutil.rmtree(nested_dir)
+                logger.info(f"Carpeta anidada eliminada: {nested_dir}")
+            except Exception as e:
+                logger.error(f"Error al eliminar carpeta anidada: {str(e)}")
+        else:
+            # Verificar si el archivo ya está en la carpeta principal
+            if not markdown_path.exists():
+                possible_files = list(output_subdir.glob("*.md"))
+                if possible_files:
+                    markdown_path = possible_files[0]
+                    logger.info(f"Archivo Markdown encontrado: {markdown_path}")
+                else:
+                    logger.error(f"No se encontraron archivos Markdown en: {output_subdir}")
+                    return None
         
-        # Generar chunks basados en la estructura Markdown
-        chunks = self.split_markdown_into_chunks(markdown_text, pdf_path.name)
+        # Leer el archivo Markdown generado
+        try:
+            with open(markdown_path, 'r', encoding='utf-8') as f:
+                markdown_text = f.read()
+                
+            if not markdown_text:
+                logger.error(f"El archivo Markdown está vacío: {markdown_path}")
+                return None
+                
+            logger.info(f"Archivo Markdown leído exitosamente: {len(markdown_text)} caracteres")
+        except Exception as e:
+            logger.error(f"Error al leer el archivo Markdown: {str(e)}")
+            return None
         
-        word_count = len(clean_text.split())
-        logger.info(f"Documento procesado: {word_count} palabras, {len(chunks)} chunks")
+        # Dividir el contenido en chunks
+        chunks = self.split_into_chunks(markdown_text, pdf_path.name)
+        
+        # Prepare los metadatos del documento
+        word_count = len(markdown_text.split())
         
         return {
             'filename': pdf_path.name,
@@ -503,13 +203,13 @@ class DocumentPreprocessor:
             'total_words': word_count,
             'chunks': chunks
         }
-
-    def split_markdown_into_chunks(self, markdown_text: str, filename: str, chunk_size: int = 250, overlap: int = 50) -> List[str]:
+    
+    def split_into_chunks(self, text: str, filename: str, chunk_size: int = 250, overlap: int = 50) -> List[str]:
         """
         Divide el texto Markdown en chunks respetando la estructura del documento.
         
         Args:
-            markdown_text (str): Texto en formato Markdown
+            text (str): Texto en formato Markdown
             filename (str): Nombre del archivo original
             chunk_size (int): Tamaño objetivo de cada chunk
             overlap (int): Cantidad de palabras de solapamiento
@@ -517,20 +217,22 @@ class DocumentPreprocessor:
         Returns:
             List[str]: Lista de chunks
         """
-        if not markdown_text:
+        if not text:
             return []
         
         chunks = []
-        lines = markdown_text.split('\n')
+        lines = text.split('\n')
         
         # Detectar patrones markdown específicos
         title_pattern = re.compile(r'^#\s+')  # Título principal
         section_pattern = re.compile(r'^##\s+')  # Secciones
         article_pattern = re.compile(r'^###\s+Art(?:ículo|\.)\s*(\d+\º?)\.?', re.IGNORECASE)  # Artículos
+        page_break_pattern = re.compile(r'^\d+\s*\n-{3,}$')  # Saltos de página generados por marker
         
         # Primero identificar las secciones principales y los artículos
         section_indices = []
         article_indices = []
+        page_breaks = []
         
         for i, line in enumerate(lines):
             if title_pattern.match(line):
@@ -539,6 +241,8 @@ class DocumentPreprocessor:
                 section_indices.append(i)
             elif article_pattern.match(line):
                 article_indices.append(i)
+            elif page_break_pattern.match(line) and i < len(lines) - 1:
+                page_breaks.append(i)
         
         # Si hay artículos, usar eso como división principal
         if article_indices:
@@ -627,54 +331,68 @@ class DocumentPreprocessor:
                         doc_prefix = f"[Documento: {os.path.basename(filename)}] "
                         chunks.append(doc_prefix + '\n'.join(current_chunk))
         
-        # Si no hay artículos ni secciones, usar el método normal
+        # Si no hay artículos ni secciones, dividir por páginas (si están marcadas)
+        elif page_breaks:
+            page_breaks = [-1] + page_breaks + [len(lines)]  # Añadir inicio y fin
+            
+            for i in range(len(page_breaks) - 1):
+                start_idx = page_breaks[i] + 1
+                end_idx = page_breaks[i + 1]
+                
+                page_lines = lines[start_idx:end_idx]
+                page_text = '\n'.join(page_lines)
+                
+                # Dividir texto por párrafos si la página es muy grande
+                if len(page_text.split()) > chunk_size:
+                    paragraphs = re.split(r'\n\s*\n', page_text)
+                    current_chunk = []
+                    current_size = 0
+                    
+                    for para in paragraphs:
+                        para_words = len(para.split())
+                        
+                        if current_size + para_words <= chunk_size:
+                            current_chunk.append(para)
+                            current_size += para_words
+                        else:
+                            # Guardar chunk actual
+                            if current_chunk:
+                                doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                                chunks.append(doc_prefix + '\n\n'.join(current_chunk))
+                            
+                            # Iniciar nuevo chunk
+                            current_chunk = [para]
+                            current_size = para_words
+                    
+                    # Guardar el último chunk
+                    if current_chunk:
+                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                        chunks.append(doc_prefix + '\n\n'.join(current_chunk))
+                else:
+                    doc_prefix = f"[Documento: {os.path.basename(filename)}] "
+                    chunks.append(doc_prefix + page_text)
+        
+        # Si no hay ninguna estructura detectable, usar división básica por párrafos
         else:
-            current_section = []
+            paragraphs = text.split('\n\n')
+            current_chunk = []
             current_size = 0
             
-            i = 0
-            while i < len(lines):
-                line = lines[i].strip()
-                
-                # Si es un título o encabezado, siempre iniciar nuevo chunk
-                if title_pattern.match(line) or section_pattern.match(line):
-                    if current_section:
-                        doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                        chunks.append(doc_prefix + '\n'.join(current_section))
-                    current_section = [line]
-                    current_size = len(line.split())
-                    i += 1
-                    continue
-                
-                # Procesar líneas normales
-                words = line.split() if line else []
+            for paragraph in paragraphs:
+                words = paragraph.split()
                 if current_size + len(words) <= chunk_size:
-                    if line or current_section:  # No añadir líneas vacías al inicio
-                        current_section.append(line)
+                    current_chunk.append(paragraph)
                     current_size += len(words)
-                    i += 1
                 else:
-                    # Si el chunk actual está vacío, forzar la inclusión de esta línea
-                    if not current_section:
-                        current_section.append(line)
-                        i += 1
-                    
-                    # Guardar chunk actual
-                    if current_section:
+                    if current_chunk:
                         doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                        chunks.append(doc_prefix + '\n'.join(current_section))
-                    
-                    # Mantener contexto para el siguiente chunk (encabezados importantes)
-                    current_section = []
-                    for j in range(max(0, i - overlap), i):
-                        if title_pattern.match(lines[j]) or section_pattern.match(lines[j]):
-                            current_section.append(lines[j])
-                    current_size = sum(len(line.split()) for line in current_section)
+                        chunks.append(doc_prefix + '\n\n'.join(current_chunk))
+                    current_chunk = [paragraph]
+                    current_size = len(words)
             
-            # Añadir el último chunk si existe
-            if current_section:
+            if current_chunk:
                 doc_prefix = f"[Documento: {os.path.basename(filename)}] "
-                chunks.append(doc_prefix + '\n'.join(current_section))
+                chunks.append(doc_prefix + '\n\n'.join(current_chunk))
         
         # Post-procesamiento para evitar chunks muy pequeños
         processed_chunks = []
@@ -695,13 +413,25 @@ class DocumentPreprocessor:
         return processed_chunks
 
     def process_all_documents(self):
-        """Procesa todos los documentos PDF en el directorio raw con mejor manejo de errores."""
+        """Procesa todos los documentos PDF en el directorio raw."""
         pdf_files = list(self.raw_dir.glob('**/*.pdf'))
         logger.info(f"Encontrados {len(pdf_files)} archivos PDF")
         
         if not pdf_files:
             logger.warning(f"No se encontraron archivos PDF en {self.raw_dir}")
             return
+        
+        # Limpiar directorios existentes para comenzar desde cero
+        for doc_dir in self.processed_dir.glob("*"):
+            if doc_dir.is_dir() and doc_dir.name != "chunks" and doc_dir.name != "images":
+                # Comprobar si corresponde a algún PDF que vamos a procesar
+                if any(pdf.stem == doc_dir.name for pdf in pdf_files):
+                    try:
+                        import shutil
+                        shutil.rmtree(doc_dir)
+                        logger.info(f"Carpeta existente eliminada para reprocesamiento: {doc_dir}")
+                    except Exception as e:
+                        logger.error(f"Error al eliminar carpeta: {doc_dir}, {str(e)}")
         
         processed_data = []
         for pdf_path in tqdm(pdf_files, desc="Procesando documentos"):
@@ -740,13 +470,14 @@ class DocumentPreprocessor:
             logger.warning("No se procesó ningún documento correctamente")
 
 def main():
-    """Función principal para ejecutar el preprocesamiento."""
+    """Función principal para ejecutar el preprocesamiento con Marker."""
     raw_dir = Path('data/raw')
     processed_dir = Path('data/processed')
     
-    logger.info(f"Iniciando preprocesamiento. Directorio raw: {raw_dir}, Directorio procesado: {processed_dir}")
+    logger.info(f"Iniciando preprocesamiento con Marker. Directorio raw: {raw_dir}, Directorio procesado: {processed_dir}")
     
-    preprocessor = DocumentPreprocessor(raw_dir, processed_dir)
+    # Usar el preprocesador basado en Marker
+    preprocessor = MarkerPreprocessor(raw_dir, processed_dir)
     preprocessor.process_all_documents()
 
 if __name__ == "__main__":

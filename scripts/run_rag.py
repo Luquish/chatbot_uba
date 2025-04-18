@@ -1,27 +1,22 @@
 import os
 import logging
-import json
 import requests
 from pathlib import Path
-from typing import List, Dict, Optional, Union, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple
 import torch
 import faiss
 import pandas as pd
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from dotenv import load_dotenv
 import numpy as np
-import huggingface_hub
-import psutil  # Añadido para verificar la memoria disponible
+import psutil
 import re
 import random
 from unidecode import unidecode
 from sklearn.metrics.pairwise import cosine_similarity
-import openai  # Importar OpenAI para la nueva integración
-import tiktoken  # Para contar tokens de OpenAI
-import time  # Añadido para manejar timestamps
-import uuid  # Para generar un ID único
+import openai
+import time
+import uuid
 
 # Crear directorio de logs si no existe
 Path("logs").mkdir(exist_ok=True)
@@ -264,10 +259,6 @@ logger = logging.getLogger(__name__)
 # Cargar variables de entorno
 load_dotenv()
 
-# Determinar el entorno (desarrollo o producción)
-ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
-logger.info(f"Iniciando sistema RAG en entorno: {ENVIRONMENT}")
-
 # Función para configurar el dispositivo según preferencias
 def get_device():
     """Configura el dispositivo según preferencias y disponibilidad."""
@@ -286,31 +277,13 @@ def get_device():
     logger.info(f"Usando dispositivo: {device}")
     return device
 
-# Importaciones condicionales para Pinecone (solo en producción)
-if ENVIRONMENT == 'production':
-    try:
-        import pinecone
-        PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
-        PINECONE_ENVIRONMENT = os.getenv('PINECONE_ENVIRONMENT')
-        PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', 'uba-chatbot-embeddings')
-        if not all([PINECONE_API_KEY, PINECONE_ENVIRONMENT]):
-            logger.warning("Falta configuración de Pinecone. Se usará FAISS local.")
-            ENVIRONMENT = 'development'
-        else:
-            logger.info("Usando Pinecone para búsqueda de embeddings en producción.")
-            # Inicializar pinecone
-            pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
-    except ImportError:
-        logger.warning("No se pudo importar pinecone. Se usará FAISS local.")
-        ENVIRONMENT = 'development'
-
 # Clase base abstracta para búsquedas vectoriales
 class VectorStore:
     def search(self, query_embedding: List[float], k: int) -> List[Dict]:
         """Búsqueda de vectores similares"""
         raise NotImplementedError("Este método debe ser implementado por las subclases")
 
-# Implementación para FAISS (desarrollo)
+# Implementación para FAISS
 class FAISSVectorStore(VectorStore):
     def __init__(self, index_path: str, metadata_path: str):
         """
@@ -386,49 +359,6 @@ class FAISSVectorStore(VectorStore):
         
         return results[:k]  # Limitar a k resultados
 
-# Implementación para Pinecone (producción)
-class PineconeVectorStore(VectorStore):
-    def __init__(self, index_name: str):
-        """
-        Inicializa el almacén vectorial Pinecone.
-        
-        Args:
-            index_name (str): Nombre del índice en Pinecone
-        """
-        if index_name not in pinecone.list_indexes():
-            raise ValueError(f"No se encontró el índice Pinecone '{index_name}'")
-            
-        self.index = pinecone.Index(index_name)
-        stats = self.index.describe_index_stats()
-        logger.info(f"Índice Pinecone '{index_name}' cargado con {stats['total_vector_count']} vectores")
-    
-    def search(self, query_embedding: List[float], k: int) -> List[Dict]:
-        """
-        Búsqueda de vectores similares en Pinecone.
-        
-        Args:
-            query_embedding (List[float]): Embedding de la consulta
-            k (int): Número de resultados a retornar
-            
-        Returns:
-            List[Dict]: Lista de resultados con metadatos
-        """
-        # Realizar búsqueda en Pinecone
-        query_results = self.index.query(
-            vector=query_embedding,
-            top_k=k,
-            include_metadata=True
-        )
-        
-        # Formatear resultados
-        results = []
-        for match in query_results['matches']:
-            # Extraer metadatos
-            metadata = match['metadata']
-            metadata['distance'] = 1.0 - match['score']  # Convertir similitud coseno a distancia
-            results.append(metadata)
-                
-        return results
 
 def get_available_memory_gb():
     """
@@ -445,8 +375,6 @@ def get_available_memory_gb():
         return available_gb
     except Exception as e:
         logger.warning(f"Error al obtener memoria disponible: {str(e)}")
-        # En caso de error, devolver un valor que permita cargar el modelo grande
-        # para no cambiar el comportamiento previo
         return 32.0
 
 def load_model_with_fallback(model_path: str, load_kwargs: Dict) -> tuple:
@@ -929,23 +857,14 @@ class RAGSystem:
 
     def _initialize_vector_store(self) -> VectorStore:
         """
-        Inicializa el almacén vectorial adecuado según el entorno.
+        Inicializa el almacén vectorial usando FAISS.
         
         Returns:
-            VectorStore: Implementación del almacén vectorial
+            VectorStore: Implementación del almacén vectorial FAISS
         """
-        if ENVIRONMENT == 'production':
-            # Usar Pinecone en producción
-            try:
-                return PineconeVectorStore(PINECONE_INDEX_NAME)
-            except (ValueError, NameError) as e:
-                logger.error(f"Error al inicializar Pinecone: {str(e)}")
-                logger.warning("Fallback a FAISS local")
-                # Fallback a FAISS si hay error
-        
-        # Usar FAISS en desarrollo o como fallback
         index_path = str(self.embeddings_dir / 'faiss_index.bin')
         metadata_path = str(self.embeddings_dir / 'metadata.csv')
+        logger.info(f"Inicializando índice FAISS desde {index_path}")
         return FAISSVectorStore(index_path, metadata_path)
         
     def _expand_query(self, query: str) -> str:
@@ -1191,13 +1110,17 @@ class RAGSystem:
             sources_text = f"\nFUENTES CONSULTADAS:\n{', '.join(formatted_sources)}"
 
         # Prompt optimizado para OpenAI
-        system_message = f"""Eres DrCecim, asistente virtual especializado de la Facultad de Medicina UBA. Tu tarea es proporcionar respuestas breves, precisas y útiles.
+        system_message = f"""Sos DrCecim, un asistente virtual especializado de la Facultad de Medicina UBA. Tu tarea es proporcionar respuestas son sobre administración y trámites de la facultad y deben ser breves, precisas y útiles.
 
 SOBRE TI:
 - Te llamas DrCecim y eres un asistente virtual de la Facultad de Medicina UBA
 - Fuiste creado para ayudar a responder preguntas sobre trámites, reglamentos y procedimientos
 - Cuando te pregunten sobre tu identidad, debes responder que eres DrCecim
 - No confundas preguntas sobre tu identidad con preguntas sobre la identidad del usuario
+- Cuando te pregunten como estas, o alguna relacionada a tu estado, debes responder que estas bien y listo para ayudar.
+- Solo saluda cuando el usuario te saluda por primera vez.
+- Siempre debes responder en modo casual, como un amigo.
+- Siempre debes responder en modo informal, como un mensaje de WhatsApp.
 
 INFORMACIÓN RELEVANTE:
 {context}
@@ -1214,9 +1137,9 @@ RESPONDE SIGUIENDO ESTAS REGLAS:
 2. Usa la información de los documentos oficiales primero.
 3. Si hay documentos específicos, cita naturalmente su origen ("Según el reglamento...").
 4. NO uses NUNCA formato Markdown (como asteriscos para negrita o cursiva) ya que esto no se procesa correctamente en WhatsApp.
-5. Para enfatizar texto, usa MAYÚSCULAS o comillas, pero NUNCA asteriscos.
+5. Para enfatizar texto, usa MAYÚSCULAS, comillas o asteriscos.
 6. Usa viñetas con guiones (-) cuando sea útil para mayor claridad.
-7. Si la información está incompleta, sugiere contactar a alumnos@fmed.uba.ar sin usar asteriscos.
+7. Si la información está incompleta, sugiere contactar a @cecim.nemed por instagram.
 8. No hagas preguntas adicionales."""
 
         # Llamada a la API de OpenAI con mensajes formatados

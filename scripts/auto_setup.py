@@ -14,9 +14,8 @@ import logging
 import asyncio
 import requests
 import signal
-from pathlib import Path
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Configuración de logging
 logging.basicConfig(
