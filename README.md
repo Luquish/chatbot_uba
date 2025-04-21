@@ -1,325 +1,207 @@
-# UBA Administrative Chatbot Template
+# Chatbot Administrativo UBA
 
-A template for building educational chatbots for administrative support at any faculty of the University of Buenos Aires (UBA). This project implements a WhatsApp-based chatbot that uses RAG (Retrieval Augmented Generation) to provide accurate and contextual responses to administrative queries.
+Un sistema de chatbot administrativo para la Universidad de Buenos Aires (UBA) basado en tecnología RAG (Retrieval Augmented Generation) e integración con WhatsApp. El sistema proporciona respuestas precisas y contextuales a consultas administrativas utilizando documentos institucionales.
 
-## Project Overview
+## Descripción General
 
-This project aims to develop a template for creating administrative support chatbots for any faculty at the University of Buenos Aires. At its core, it's a RAG (Retrieval-Augmented Generation) system that integrates the following functionalities:
+Este proyecto implementa un asistente virtual para cualquier facultad de la UBA que responde consultas administrativas a través de WhatsApp. El sistema utiliza técnicas avanzadas de procesamiento de lenguaje natural:
 
-### Document Preprocessing
-- Extracts and cleans text from PDF documents (e.g., regularity conditions, disciplinary regulations)
-- Segments text into chunks with overlap to maintain context
-- Generates metadata for each chunk
-- Easily adaptable to any faculty's specific documentation
+### Características Principales
 
-### Embeddings Generation and Context Retrieval
-- Uses multilingual models (like sentence-transformers) to transform chunks into embeddings
-- Indexes locally with FAISS for testing
-- Can be configured to use Pinecone in production
-- Enables relevant information retrieval in response to student queries
-- Supports both Spanish and local Argentine expressions
+- **Procesamiento de Documentos**: Extrae y procesa texto de documentos PDF utilizando Marker PDF, preservando la estructura y generando chunks optimizados para RAG.
+- **Sistema de Embeddings**: Utiliza OpenAI (text-embedding-3-small) para generar embeddings de alta calidad y almacenarlos en índices FAISS.
+- **Motor RAG**: Sistema de Generación Aumentada por Recuperación que combina recuperación de información y generación de respuestas contextuales.
+- **Integración WhatsApp**: Conexión directa con la API de WhatsApp Business para enviar y recibir mensajes.
+- **Sistema de Intenciones**: Clasificación semántica de consultas para personalizar las respuestas según el tipo de pregunta.
+- **Fine-tuning de Modelos**: Capacidad de fine-tuning mediante OpenAI para adaptar el modelo a interacciones específicas.
 
-### Modeling and Fine-Tuning
-- Works with open-source LLMs (like Mistral or lighter alternatives based on resource availability)
-- Implements LoRA fine-tuning to adapt the model to:
-  - Administrative context and language
-  - Interaction examples
-  - Local expressions (Argentine Spanish)
-  - Faculty-specific terminology
+### Flujo del Sistema
 
-### Backend and API
-- Built with FastAPI for asynchronous and scalable request handling
-- Direct integration with WhatsApp Cloud API for messaging
-- Robust error handling and logging
-- Easy to configure and deploy
+1. El estudiante envía una consulta por WhatsApp
+2. El backend de FastAPI recibe el mensaje a través de un webhook
+3. El sistema RAG analiza la consulta e identifica la intención
+4. Se recupera información relevante desde la base de conocimientos
+5. Se genera una respuesta utilizando la información contextual y la consulta
+6. La respuesta se envía de vuelta al estudiante a través de WhatsApp
 
-### System Integration
-The complete flow works as follows:
-1. Student sends a query via WhatsApp
-2. WhatsApp Cloud API forwards the message to our FastAPI backend
-3. RAG system queries the embeddings index to retrieve relevant context from processed documents
-4. Fine-tuned LLM generates a response combining the context and query
-5. Response is sent back to the student through WhatsApp
-
-### Key Features
-- WhatsApp Business API integration
-- RAG-based response generation
-- Fine-tuned language model
-- Automatic setup and deployment
-- Robust error handling
-- Detailed logging
-- Easy customization for different faculties
-
-This template provides a reliable and scalable tool that combines natural language processing, information retrieval, and messaging (through WhatsApp) to provide administrative support to UBA students, adaptable to any faculty's specific needs and documentation.
-
-## Features
-
-- WhatsApp Business API integration
-- RAG-based response generation
-- Fine-tuned language model
-- Automatic setup and deployment
-- Robust error handling
-- Detailed logging
-
-## Project Structure
+## Estructura del Proyecto
 
 ```
 .
 ├── data/
-│   ├── raw/           # Raw data files
-│   ├── processed/     # Processed data
-│   └── embeddings/    # Generated embeddings
-├── models/            # Model files
-├── scripts/           # Python scripts
-│   ├── auto_setup.py  # Automatic setup
-│   ├── create_embeddings.py  # Embedding generation
-│   ├── deploy_backend.py     # Backend deployment
-│   ├── preprocess.py  # Data preprocessing
-│   ├── run_rag.py     # RAG system
-│   └── train_finetune.py  # Model fine-tuning
-└── logs/              # Log files
+│   ├── raw/           # Documentos PDF sin procesar
+│   ├── processed/     # Documentos procesados en formato markdown
+│   ├── embeddings/    # Embeddings e índices FAISS generados
+│   └── finetuning/    # Datos para fine-tuning del modelo
+├── models/            # Modelos entrenados o fine-tuneados
+├── scripts/
+│   ├── preprocess.py        # Procesamiento de documentos PDF con Marker
+│   ├── create_embeddings.py # Generación de embeddings con OpenAI
+│   ├── run_rag.py           # Sistema RAG para consultas y respuestas
+│   ├── deploy_backend.py    # Backend FastAPI y webhook de WhatsApp
+│   ├── train_finetune.py    # Fine-tuning de modelos con OpenAI
+│   └── auto_setup.py        # Configuración automática del entorno
+├── logs/              # Archivos de registro
+└── config/            # Archivos de configuración
 ```
 
-## Setup
+## Configuración
 
-1. Clone the repository:
+1. Clona el repositorio:
 ```bash
 git clone https://github.com/yourusername/chatbot_uba.git
 cd chatbot_uba
 ```
 
-2. Install dependencies:
+2. Instala las dependencias:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Configure environment variables in `.env`:
-```
-ENVIRONMENT=development
-MODEL_PATH=models/finetuned_model
-EMBEDDINGS_DIR=data/embeddings
-WHATSAPP_API_TOKEN=your_token
-WHATSAPP_PHONE_NUMBER_ID=your_phone_id
-WHATSAPP_BUSINESS_ACCOUNT_ID=your_account_id
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_verify_token
-MY_PHONE_NUMBER=your_test_number
-HUGGING_FACE_HUB_TOKEN=your_huggingface_token  # Required for model inference
+3. Crea un archivo `.env` basado en el template `.env.example`:
+```bash
+cp .env.example .env
 ```
 
-4. Run the auto setup script:
+4. Configura las variables de entorno en el archivo `.env`:
+
+### Variables de Entorno Principales
+
+```
+# General
+ENVIRONMENT=development                   # development o production
+
+# WhatsApp Business API
+WHATSAPP_API_TOKEN=your_token             # Token de la API de WhatsApp
+WHATSAPP_PHONE_NUMBER_ID=your_phone_id    # ID del número de teléfono en WhatsApp Business
+WHATSAPP_BUSINESS_ACCOUNT_ID=your_account_id  # ID de la cuenta de negocio
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_token  # Token para verificar webhooks
+
+# Configuración de Glitch (para webhook en desarrollo)
+GLITCH_PROJECT_NAME=your_project_name     # Nombre del proyecto en Glitch
+GLITCH_API_URL=https://api.glitch.com     # URL de la API de Glitch
+
+# Backend y servidor
+BACKEND_URL=http://localhost:8000/api/whatsapp/message  # URL para webhooks
+HOST=0.0.0.0                              # Host para el servidor FastAPI
+PORT=8000                                 # Puerto para el servidor FastAPI
+
+# Configuración de OpenAI
+OPENAI_API_KEY=your_openai_key            # API Key de OpenAI
+PRIMARY_MODEL=gpt-4o-mini                 # Modelo principal de OpenAI
+FALLBACK_MODEL=gpt-4.1-nano               # Modelo de respaldo si falla el principal
+EMBEDDING_MODEL=text-embedding-3-small    # Modelo para embeddings
+
+
+# Parámetros de generación
+MAX_LENGTH=512                            # Longitud máxima de contexto
+TEMPERATURE=0.7                           # Temperatura para generación
+TOP_P=0.9                                 # Parámetro top_p para generación
+TOP_K=50                                  # Parámetro top_k para generación
+MAX_OUTPUT_TOKENS=300                     # Máxima longitud de salida
+
+# Configuración de RAG
+RAG_NUM_CHUNKS=3                          # Número de chunks a recuperar
+SIMILARITY_THRESHOLD=0.3                  # Umbral de similitud mínima
+
+# Directorios de datos
+MODEL_PATH=models/finetuned_model         # Directorio para modelos
+EMBEDDINGS_DIR=data/embeddings            # Directorio para embeddings
+
+# Dispositivo para cálculos
+DEVICE=mps                                # auto, cuda, cpu, o mps para Mac
+```
+
+5. Ejecuta el script de configuración automática:
 ```bash
 python scripts/auto_setup.py
 ```
 
-This script will:
-- Start the backend server (deploy_backend.py)
-- Configure ngrok to create a public URL
-- Verify WhatsApp token validity
-- Display instructions for Glitch configuration
-- Keep services running for development
-- Handle graceful shutdown on Ctrl+C
+## Flujo de Trabajo
 
-The script will show you:
-- The local backend URL (http://localhost:8000)
-- The ngrok public URL for Glitch configuration
-- Instructions for setting up the webhook in Meta
-- Instructions for configuring Glitch variables
+### 1. Procesamiento de Documentos
 
-Keep this script running during development to maintain the backend and ngrok tunnel active.
-
-## Development
-
-1. Start the backend server:
-```
-
-## Scripts
-
-### preprocess.py
-
-Specialized script for preprocessing PDF documents for the RAG system.
-
-#### Main Features:
-
-1. **Text Extraction**
-   - Uses pdfminer for robust text extraction
-   - Fallback system for problematic documents
-   - Document structure preservation
-   - Handles complex university administrative documents
-
-2. **University Document Processing**
-   - Recognition of specific sections (articles, resolutions, etc.)
-   - Conversion to structured Markdown format
-   - Document hierarchy preservation
-   - Special handling of regulatory and administrative content
-
-3. **Intelligent Chunking System**
-   - Text division into RAG-optimized fragments
-   - Context preservation in each chunk
-   - Special handling of articles and sections
-   - Configurable overlap between chunks
-   - Smart chunk size management
-
-4. **Data Management**
-   - Metadata generation for each document
-   - Detailed logging system
-   - CSV results export
-   - Individual chunk storage
-   - Document processing tracking
-
-#### Usage:
+Convierte documentos PDF a formato procesable:
 
 ```bash
 python scripts/preprocess.py
 ```
 
-#### Directory Structure:
-- Input: `data/raw/` - Raw PDF documents
-- Output: 
-  - `data/processed/` - Processed documents in Markdown format
-  - `data/processed/chunks/` - Individual chunks
-  - `data/processed/processed_documents.csv` - Processing metadata
+Este script:
+- Utiliza Marker PDF para extraer texto de documentos PDF
+- Convierte documentos a formato Markdown
+- Divide el texto en chunks optimizados para RAG
+- Genera metadatos para cada documento y chunk
 
-#### Configuration:
-- Chunk size: 250 words (configurable)
-- Overlap: 50 words (configurable)
-- Minimum chunk size: 50 words
+### 2. Generación de Embeddings
 
-#### Key Methods:
-- `extract_text_from_pdf`: Robust PDF text extraction
-- `clean_text`: Text normalization and cleaning
-- `convert_to_markdown`: Conversion to structured Markdown
-- `split_into_chunks`: Intelligent document chunking
-- `process_document`: Complete document processing pipeline
-
-### create_embeddings.py
-
-Script responsible for generating and managing text embeddings using OpenAI's API.
-
-#### Main Features:
-
-1. **OpenAI Integration**
-   - Uses OpenAI's text-embedding models (text-embedding-3-small)
-   - Robust API error handling
-   - Configurable batch processing
-   - Automatic rate limiting management
-
-2. **Embedding Generation**
-   - Processes chunks from preprocessed documents
-   - Handles batch processing for efficiency
-   - Implements automatic retries and error recovery
-   - Normalizes embeddings for consistent similarity search
-
-3. **Vector Storage**
-   - Creates and manages FAISS indices for vector storage
-   - Optimizes index type based on dataset size
-   - Implements efficient similarity search capabilities
-   - Handles both small and large-scale vector collections
-
-4. **Data Management**
-   - Comprehensive metadata tracking
-   - Detailed logging of embedding generation process
-   - Statistical summaries of processed documents
-   - Configuration tracking and versioning
-
-#### Usage:
+Genera embeddings para los chunks procesados:
 
 ```bash
 python scripts/create_embeddings.py
 ```
 
-#### Requirements:
-- OpenAI API key configured in `.env`
-- Processed documents in `data/processed/`
-- Sufficient disk space for embedding storage
+Este script:
+- Utiliza OpenAI para generar embeddings de alta calidad
+- Crea un índice FAISS para búsqueda eficiente
+- Almacena metadatos para cada embedding
 
-#### Directory Structure:
-- Input: `data/processed/processed_documents.csv`
-- Output:
-  - `data/embeddings/faiss_index.bin` - FAISS vector index
-  - `data/embeddings/metadata.csv` - Detailed chunk metadata
-  - `data/embeddings/metadata_summary.csv` - Processing statistics
-  - `data/embeddings/config.json` - Configuration details
+### 3. Fine-tuning del Modelo (Opcional)
 
-#### Key Methods:
-- `generate_embeddings`: Creates embeddings using OpenAI's API
-- `create_faiss_index`: Builds optimized FAISS indices
-- `save_metadata`: Stores comprehensive embedding metadata
-- `process_documents`: Main pipeline for embedding generation
-
-#### Configuration:
-- Embedding model: text-embedding-3-small (default)
-- Batch size: 16 (configurable)
-- Vector dimension: 1536 (small) or 3072 (large)
-- Automatic index optimization for collections > 10,000 vectors
-
-# Chatbot UBA - Procesamiento de Documentos
-
-Este repositorio contiene un sistema de procesamiento de documentos para el chatbot de la Universidad de Buenos Aires, que incluye las siguientes funcionalidades:
-
-## Procesamiento de Documentos con Marker PDF
-
-El sistema utiliza [Marker PDF](https://github.com/VikParuchuri/marker), una herramienta avanzada para convertir documentos a markdown, JSON y HTML con alta precisión.
-
-### Características implementadas
-
-- **Conversión de PDF a Markdown**: Procesa documentos PDF con alta precisión, preservando la estructura original.
-- **Extracción de texto inteligente**: Utiliza OCR cuando es necesario para mejorar la calidad del texto extraído.
-- **Detección de estructura**: Mantiene la jerarquía de los documentos (títulos, secciones, artículos, etc.).
-- **División en chunks**: Segmenta los documentos en fragmentos de tamaño adecuado para su posterior indexación.
-- **Procesamiento de tablas**: Reconoce y formatea correctamente las tablas en el texto.
-- **Manejo de paginación**: Preserva información de paginación para facilitar referencias al documento original.
-
-### Instalación
-
-Para usar el sistema de procesamiento, instale las dependencias:
+Ajusta un modelo para mejorar respuestas específicas:
 
 ```bash
-pip install marker-pdf pandas tqdm
+python scripts/train_finetune.py
 ```
 
-### Uso
+Este script:
+- Prepara datos de entrenamiento en formato OpenAI
+- Crea y monitorea un trabajo de fine-tuning
+- Guarda información del modelo fine-tuneado
 
-1. Coloque los archivos PDF a procesar en la carpeta `data/raw/`
-2. Ejecute el script de preprocesamiento:
+### 4. Despliegue del Backend
+
+Inicia el servidor FastAPI y configura webhooks:
 
 ```bash
-python -m scripts.preprocess
+python scripts/deploy_backend.py
 ```
 
-3. Los resultados se guardarán en `data/processed/`:
-   - Archivos Markdown para cada documento
-   - Archivos de texto para cada chunk
-   - CSV con metadatos de los documentos procesados
-   - Imágenes extraídas (si las hay)
+Este script:
+- Inicia el servidor FastAPI
+- Configura rutas para webhooks de WhatsApp
+- Maneja mensajes entrantes y procesa respuestas
 
-### Estructura
+### 5. Configuración Automática (Desarrollo)
 
-El procesamiento se realiza mediante la clase `MarkerPreprocessor` que:
+Para desarrollo local con ngrok:
 
-1. Detecta y verifica la instalación de Marker
-2. Procesa cada documento PDF mediante `marker_single`
-3. Divide el texto en chunks respetando la estructura jerárquica
-4. Guarda los resultados en formatos apropiados para su uso en el sistema RAG
+```bash
+python scripts/auto_setup.py
+```
 
-### Ventajas sobre otros procesadores
+Este script:
+- Inicia el backend en segundo plano
+- Configura ngrok para crear una URL pública
+- Verifica la validez del token de WhatsApp
+- Muestra instrucciones de configuración
 
-- Alta precisión en la extracción de texto
-- Excelente detección de la estructura del documento
-- Conversión precisa de tablas y elementos complejos
-- Mejor preservación del formato original
-- Capacidad de utilizar OCR avanzado para documentos escaneados
+## Requisitos
 
-### Integración con el sistema RAG
+- Python 3.9+
+- Marker PDF para procesamiento de documentos
+- Cuenta de OpenAI con API key
+- Cuenta de WhatsApp Business
+- ngrok para desarrollo local
 
-Los chunks generados están optimizados para su uso con sistemas de Recuperación Aumentada por Generación (RAG), incluyendo:
+## Dependencias Principales
 
-- Prefijos con metadatos del documento de origen
-- Tamaño adecuado para indexación
-- Preservación de contexto en la división (manteniendo títulos y referencias)
-- Formato consistente para mejorar el retrieval
+- FastAPI y Uvicorn para el backend
+- Transformers y PyTorch para modelos de NLP
+- FAISS para índices de vectores
+- OpenAI para embeddings y fine-tuning
+- Marker PDF para procesamiento de documentos
 
-## Próximos pasos
+## Licencia
 
-- Implementar soporte para documentos DOCX y otros formatos
-- Agregar extracción de metadatos avanzados
-- Mejorar la detección de elementos específicos para documentos de la UBA
+Este proyecto está bajo licencia [Incluir la licencia correspondiente]

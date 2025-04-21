@@ -282,45 +282,6 @@ class EmbeddingGenerator:
         
         return index
     
-    def store_in_pinecone(self, texts: List[str], embeddings: np.ndarray, 
-                           filenames: List[str], chunk_indices: List[int]) -> None:
-        """
-        Almacena los embeddings en Pinecone.
-        
-        Args:
-            texts (List[str]): Lista de textos
-            embeddings (np.ndarray): Array de embeddings
-            filenames (List[str]): Lista de nombres de archivo
-            chunk_indices (List[int]): Lista de índices de chunks
-        """
-        # Preparar los vectores para la inserción en Pinecone
-        vectors_to_upsert = []
-        
-        for i, (text, embedding, filename, chunk_idx) in enumerate(
-            zip(texts, embeddings, filenames, chunk_indices)
-        ):
-            # Crear un ID único para cada vector
-            vector_id = f"{filename.replace('.', '_')}_{chunk_idx}"
-            
-            # Crear el registro con el vector y metadatos
-            vectors_to_upsert.append({
-                'id': vector_id,
-                'values': embedding.tolist(),
-                'metadata': {
-                    'text': text,
-                    'filename': filename,
-                    'chunk_index': chunk_idx
-                }
-            })
-            
-            # Insertar en lotes para mejorar el rendimiento
-            if len(vectors_to_upsert) >= 100 or i == len(texts) - 1:
-                logger.info(f"Insertando lote de {len(vectors_to_upsert)} vectores en Pinecone...")
-                self.pinecone_index.upsert(vectors=vectors_to_upsert)
-                vectors_to_upsert = []
-                
-        logger.info(f"Embeddings almacenados en Pinecone. Total: {len(texts)} vectores.")
-        
     def save_metadata(self, texts: List[str], filenames: List[str], chunk_indices: List[int]):
         """
         Guarda metadatos de los embeddings con más información.

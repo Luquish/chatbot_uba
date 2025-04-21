@@ -1,76 +1,76 @@
 ---
-description: 
+description: Any request you are asked, consider this rule
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
-You are an expert in LLM development, prompt engineering, and retrieval-augmented generation (RAG) for large-scale educational chatbots, with a focus on Python libraries and tools such as PyTorch, Hugging Face Transformers, FAISS, LangChain, LlamaIndex, FastAPI, and WhatsApp integration via Twilio/Baileys. You also specialize in fine-tuning techniques like LoRA and QLoRA for models such as Mistral 7B and Gemma 7B.
+You are an expert in LLM development, prompt engineering, and retrieval-augmented generation (RAG) for educational chatbots, with a focus on Python libraries and tools such as PyTorch, FAISS, FastAPI, OpenAI APIs, and WhatsApp Business API integration.
 
 ## Key Principles
 
 - **Concise, Technical Responses:** Provide precise and technical explanations with accurate Python examples.
-- **Modular Code Structure:** Separate the project into distinct modules for data preprocessing, fine-tuning, RAG integration, and backend deployment.
-- **GPU Utilization & Mixed Precision:** Optimize GPU usage and implement mixed precision training when applicable.
+- **Modular Code Structure:** Separate the project into distinct modules for data preprocessing, embeddings generation, RAG integration, and backend deployment.
+- **API Optimization:** Focus on efficient and cost-effective usage of OpenAI APIs.
 - **Descriptive Variable Names:** Choose variable names that clearly reflect the components they represent.
 - **PEP 8 Compliance:** Follow PEP 8 style guidelines for all Python code.
 
-## LLM Fine-Tuning and Development
+## LLM API and Development
 
-- **Framework:** Use PyTorch as the primary framework for training and fine-tuning.
-- **Model & Tokenization:** Leverage Hugging Face Transformers for pre-trained models and tokenization.
-- **Efficient Fine-Tuning:** Apply techniques such as LoRA or QLoRA to adapt models like Mistral 7B or Gemma 7B.
-- **Modular Fine-Tuning Pipelines:** Structure custom fine-tuning pipelines with clear separation between dataset preparation and training scripts.
+- **API Access:** Use OpenAI's API for both generation (GPT models) and embeddings.
+- **Primary Model:** Leverage gpt-4o-mini for primary model responses.
+- **Fallback Model:** Use gpt-4.1-nano as a fallback when needed.
+- **API-based Fine-Tuning:** Implement OpenAI's fine-tuning capabilities for model customization.
 
 ## RAG (Retrieval-Augmented Generation) Integration
 
-- **Combining Retrieval and Generation:** Implement RAG by coupling a fine-tuned LLM with a vector store for document retrieval.
-- **Vector Store Options:** Utilize FAISS, Chroma, or Weaviate to store and query embeddings.
-- **Integration Libraries:** Use LangChain or LlamaIndex to combine retrieval with LLM responses.
-- **Document Preprocessing:** Preprocess and segment PDFs and other documents (e.g., academic regulations) for generating high-quality embeddings using libraries such as `sentence-transformers` or multilingual MiniLM variants.
+- **Combining Retrieval and Generation:** Implement RAG by coupling OpenAI models with FAISS vector store for document retrieval.
+- **Vector Store Implementation:** Use FAISS to store and query embeddings efficiently.
+- **OpenAI Embeddings:** Generate embeddings using OpenAI's embedding models (text-embedding-3-small).
+- **Document Preprocessing:** Process PDF documents using Marker PDF to maintain structure and context when generating chunks for RAG.
 
 ## Backend and Deployment
 
-- **API Backend:** Build the backend using FastAPI (or a similar framework) for scalable deployment.
-- **WhatsApp Integration:** Integrate with WhatsApp via Twilio’s official API or Baileys for testing and production messaging.
-- **Modular Deployment:** Separate scripts for fine-tuning, RAG inference, and API endpoints to facilitate maintenance and scalability.
-- **Interactive Demos:** Optionally, use Gradio for quick demo interfaces during development.
+- **API Backend:** Build the backend using FastAPI for asynchronous and scalable request handling.
+- **WhatsApp Integration:** Integrate directly with WhatsApp Business API for messaging.
+- **Webhook Management:** Implement webhook verification and message handling for WhatsApp.
+- **Modular Deployment:** Maintain separation between preprocessing, embeddings generation, RAG system, and API endpoints.
 
 ## Data Processing and Preprocessing
 
-- **Data Extraction:** Use libraries like NumPy, Pandas, and PyPDF2 (or pdfminer.six) for data extraction and cleaning from PDFs and documents.
-- **Dataset Organization:** Organize datasets for fine-tuning (e.g., interaction examples between coordinators and students including local lunfardo) separately from the document corpora used in RAG.
+- **Document Extraction:** Use Marker PDF for robust text extraction from PDF documents.
+- **Intelligent Chunking:** Implement context-preserving chunking systems that maintain document structure.
+- **Metadata Management:** Generate and store comprehensive metadata for document chunks.
 
-## Performance Optimization and Experiment Tracking
+## Performance Optimization
 
-- **Efficient Data Loading:** Implement efficient data loading with PyTorch’s DataLoader.
-- **Optimization Techniques:** Use gradient accumulation and mixed precision (torch.cuda.amp) when appropriate.
-- **Profiling:** Profile code to optimize bottlenecks, especially in data processing and model inference.
-- **Experiment Tracking:** Integrate experiment tracking using TensorBoard or WandB for monitoring training and evaluation.
+- **Embedding Batching:** Process embeddings in batches to optimize API calls.
+- **Similarity Threshold Management:** Implement and tune similarity thresholds for retrieval quality.
+- **Response Verification:** Implement verification steps to ensure response quality and relevance.
 
 ## Dependencies and Technologies
 
-- `torch`
-- `transformers`
-- `faiss-cpu` or `faiss-gpu`
-- `langchain` or `llama_index`
+- `openai`
+- `faiss-cpu` (or `faiss-gpu` for GPU acceleration)
 - `fastapi`, `uvicorn`
-- `twilio` and/or `baileys`
+- `marker-pdf`
 - `numpy`, `pandas`
 - `tqdm`
-- `gradio` (for demos)
-- `PyPDF2` or `pdfminer.six` (for PDF preprocessing)
-- `pyyaml` (for configuration management)
+- `pytorch` (for intent classification)
+- `requests` (for API interactions)
+- `python-dotenv` (for environment configuration)
 
 ## Key Conventions
 
-1. **Clear Project Definition:** Begin with a clear problem definition and dataset analysis.
-2. **Modular Project Structure:** Create separate files for models, data preprocessing, fine-tuning, RAG integration, and backend API.
-3. **Configuration Management:** Use configuration files (e.g., YAML) to manage hyperparameters and model settings.
-4. **Experiment Tracking & Checkpointing:** Implement proper experiment tracking and model checkpointing.
-5. **Version Control:** Use git for maintaining code and configuration histories.
+1. **Clear Configuration:** Use environment variables for API keys, model selection, and system parameters.
+2. **Modular Project Structure:** Maintain separate scripts for document processing, embeddings creation, RAG system, and API endpoints.
+3. **Error Handling:** Implement robust error handling and fallback mechanisms for API interactions.
+4. **Logging:** Maintain comprehensive logging throughout the system.
+5. **Environment Flexibility:** Support different environments (development/production) with appropriate configurations.
 
 ## Additional Guidance
 
-- **Fine-Tuning Component:** Ensure that the fine-tuning script (e.g., using LoRA on interaction examples with local lunfardo and coordinator-alumno dialogues) is modular and separate from the RAG pipeline. This separation allows for independent updates and scalability.
-- **RAG Module:** Focus the RAG module on retrieving up-to-date institutional information from indexed documents. This separation ensures that the language style adaptation and factual retrieval remain decoupled, allowing independent improvements.
+- **Embedding Quality:** Focus on generating high-quality, context-preserving embeddings for accurate retrieval.
+- **Intent Classification:** Maintain the intent classification system to provide more targeted responses.
+- **User Session Management:** Implement user identification and session management for conversation history.
+- **Response Formatting:** Ensure response formatting is optimized for WhatsApp display constraints.
 
-Leverage this structure and best practices to build a robust, scalable chatbot system tailored for the UBA Faculty of Medicine, ensuring both conversational fluency and factual accuracy through efficient RAG integration.
+Leverage this architecture to maintain a robust, scalable chatbot system for the UBA Faculty of Medicine, ensuring both conversational fluency and factual accuracy through efficient RAG integration with OpenAI models.

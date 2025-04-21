@@ -6,7 +6,6 @@ from typing import List, Dict, Optional, Any, Tuple
 import torch
 import faiss
 import pandas as pd
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from dotenv import load_dotenv
 import numpy as np
 import psutil
@@ -359,218 +358,61 @@ class FAISSVectorStore(VectorStore):
         
         return results[:k]  # Limitar a k resultados
 
-
-def get_available_memory_gb():
-    """
-    Obtiene la cantidad de memoria RAM disponible en GB.
-    
-    Returns:
-        float: Memoria disponible en GB
-    """
-    try:
-        # Intentar obtener la memoria virtual disponible
-        available = psutil.virtual_memory().available
-        available_gb = available / (1024 ** 3)  # Convertir a GB
-        logger.info(f"Memoria disponible: {available_gb:.2f} GB")
-        return available_gb
-    except Exception as e:
-        logger.warning(f"Error al obtener memoria disponible: {str(e)}")
-        return 32.0
-
 def load_model_with_fallback(model_path: str, load_kwargs: Dict) -> tuple:
     """
-    Intenta cargar un modelo y, si falla por autenticación o memoria insuficiente, 
-    usa un modelo abierto como alternativa.
-    Soporta optimizaciones según plataforma.
+    Intenta cargar un modelo y, si falla, usa un modelo alternativo.
     
     Args:
-        model_path (str): Ruta al modelo preferido
-        load_kwargs (Dict): Argumentos para cargar el modelo
+        model_path (str): Nombre del modelo de OpenAI preferido
+        load_kwargs (Dict): Argumentos para la configuración
         
     Returns:
-        tuple: (modelo, tokenizer, nombre_del_modelo_cargado)
+        tuple: (modelo, nombre_del_modelo_cargado)
     """
-    # Modelo abierto de respaldo
-    fallback_model = os.getenv('FALLBACK_MODEL_NAME', 'google/gemma-2b')
-    
-    # Detectar si estamos en Mac con Apple Silicon
-    is_mac_silicon = torch.backends.mps.is_available()
-    
-    # Verificar memoria disponible
-    available_memory_gb = get_available_memory_gb()
-    memory_threshold_gb = 16.0  # Necesitamos al menos 16GB libres para Mistral 7B
-    
-    # Decidir si usar el modelo de respaldo basado en la memoria disponible
-    if available_memory_gb < memory_threshold_gb:
-        logger.warning(f"Memoria disponible ({available_memory_gb:.2f} GB) es menor que el umbral recomendado ({memory_threshold_gb} GB)")
-        logger.warning(f"Usando modelo de respaldo para evitar errores de memoria: {fallback_model}")
-        model_path = fallback_model
-    
-    # Ajustar configuración según la plataforma
-    if is_mac_silicon:
-        logger.info("Detectado Mac con Apple Silicon, ajustando configuración de carga")
-        
-        # Para Mac Silicon, desactivamos bitsandbytes independientemente de la configuración
-        # Quitamos la cuantización que causa problemas en Mac
-        if "load_in_8bit" in load_kwargs and load_kwargs["load_in_8bit"]:
-            logger.warning("Desactivando cuantización de 8 bits en Apple Silicon")
-            load_kwargs["load_in_8bit"] = False
-        if "load_in_4bit" in load_kwargs and load_kwargs["load_in_4bit"]:
-            logger.warning("Desactivando cuantización de 4 bits en Apple Silicon")
-            load_kwargs["load_in_4bit"] = False
-        
-        # Configurar para usar la aceleración de MPS por defecto
-        if "device_map" in load_kwargs:
-            load_kwargs["device_map"] = "mps"
-        
-        # Aumentamos la precisión para compensar la falta de cuantización
-        load_kwargs["torch_dtype"] = torch.float16
-    else:
-        # En otras plataformas (Windows/Linux), mantenemos la configuración original
-        # que puede incluir bitsandbytes si está activado
-        logger.info("Usando configuración estándar para plataforma no-Mac")
-        
-        # Verificar si se ha habilitado 8bit o 4bit
-        use_8bit = os.getenv('USE_8BIT', 'False').lower() == 'true'
-        use_4bit = os.getenv('USE_4BIT', 'False').lower() == 'true'
-        
-        # Aplicar configuración de bitsandbytes si está activada
-        if use_8bit:
-            logger.info("Activando cuantización de 8 bits con bitsandbytes")
-            load_kwargs["load_in_8bit"] = True
-        elif use_4bit:
-            logger.info("Activando cuantización de 4 bits con bitsandbytes")
-            load_kwargs["load_in_4bit"] = True
+    # Modelo de respaldo
+    fallback_model = os.getenv('FALLBACK_MODEL_NAME', 'gpt-4.1-nano')
     
     try:
-        logger.info(f"Intentando cargar modelo con PyTorch: {model_path}")
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
-        logger.info(f"Modelo cargado exitosamente con PyTorch: {model_path}")
-        return model, tokenizer, model_path
+        logger.info(f"Intentando inicializar modelo OpenAI: {model_path}")
+        model = OpenAIModel(
+            model_name=model_path,
+            api_key=os.getenv('OPENAI_API_KEY'),
+            timeout=int(os.getenv('API_TIMEOUT', '30')),
+            max_output_tokens=int(os.getenv('MAX_OUTPUT_TOKENS', '300'))
+        )
+        
+        # Verificar que funciona
+        test_prompt = "Escribe una palabra."
+        model.generate(test_prompt, max_tokens=10)
+        logger.info(f"Modelo OpenAI inicializado correctamente: {model_path}")
+        return model, model_path
+        
     except Exception as e:
-        error_str = str(e)
-        if "Access to model" in error_str and "is restricted" in error_str:
-            logger.warning(f"ACCESO RESTRINGIDO: El modelo {model_path} requiere autenticación en Hugging Face.")
-            logger.warning("Para usar este modelo, debes ejecutar 'huggingface-cli login' e ingresar tu token.")
-            logger.warning(f"Cambiando automáticamente al modelo abierto: {fallback_model}")
+        logger.warning(f"Error al inicializar modelo principal {model_path}: {str(e)}")
+        logger.info(f"Intentando con modelo de fallback: {fallback_model}")
+        
+        try:
+            # Intentar con el modelo de fallback
+            model = OpenAIModel(
+                model_name=fallback_model,
+                api_key=os.getenv('OPENAI_API_KEY'),
+                timeout=int(os.getenv('API_TIMEOUT', '30')),
+                max_output_tokens=int(os.getenv('MAX_OUTPUT_TOKENS', '300'))
+            )
             
-            # Cargar modelo alternativo
-            tokenizer = AutoTokenizer.from_pretrained(fallback_model)
-            model = AutoModelForCausalLM.from_pretrained(fallback_model, **load_kwargs)
-            return model, tokenizer, fallback_model
-        else:
-            # Si es otro tipo de error, reenviar la excepción
-            logger.error(f"Error al cargar el modelo: {error_str}")
-            raise
+            # Verificar que funciona
+            test_prompt = "Escribe una palabra."
+            model.generate(test_prompt, max_tokens=10)
+            logger.info(f"Modelo de fallback OpenAI inicializado correctamente: {fallback_model}")
+            return model, fallback_model
+            
+        except Exception as e2:
+            raise RuntimeError(f"No se pudo inicializar ningún modelo de OpenAI: {str(e2)}")
 
 # Clase base para modelos
 class BaseModel:
     def generate(self, prompt: str, **kwargs) -> str:
         raise NotImplementedError
-
-# Clase para usar la API de Hugging Face
-class APIModel(BaseModel):
-    def __init__(self, model_name: str, api_token: str, timeout: int = 30):
-        """
-        Inicializa el cliente de la API de Hugging Face.
-        
-        Args:
-            model_name (str): Nombre del modelo en Hugging Face
-            api_token (str): Token de la API de Hugging Face
-            timeout (int): Timeout para las llamadas a la API
-        """
-        self.model_name = model_name
-        self.api_url = f"https://api-inference.huggingface.co/models/{model_name}"
-        self.headers = {"Authorization": f"Bearer {api_token}"}
-        self.timeout = timeout
-        
-    def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Genera texto usando la API de Hugging Face.
-        
-        Args:
-            prompt (str): Texto de entrada
-            kwargs: Argumentos adicionales para la generación
-            
-        Returns:
-            str: Texto generado
-        """
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": kwargs.get("max_length", 512),
-                "temperature": kwargs.get("temperature", 0.7),
-                "top_p": kwargs.get("top_p", 0.9),
-                "top_k": kwargs.get("top_k", 50),
-                "return_full_text": False
-            }
-        }
-        
-        try:
-            response = requests.post(
-                self.api_url, 
-                headers=self.headers, 
-                json=payload,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            result = response.json()
-            
-            if isinstance(result, list) and len(result) > 0:
-                generated_text = result[0].get("generated_text", "")
-                return generated_text.strip()
-            else:
-                raise ValueError(f"Respuesta inesperada de la API: {result}")
-                
-        except Exception as e:
-            logger.error(f"Error al generar texto con la API de {self.model_name}: {str(e)}")
-            raise
-
-# Clase para modelo local
-class LocalModel(BaseModel):
-    def __init__(self, model, tokenizer, device):
-        """
-        Inicializa el modelo local.
-        
-        Args:
-            model: Modelo de transformers
-            tokenizer: Tokenizer del modelo
-            device: Dispositivo para inferencia
-        """
-        self.model = model
-        self.tokenizer = tokenizer
-        self.device = device
-        
-    def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Genera texto usando el modelo local.
-        
-        Args:
-            prompt (str): Texto de entrada
-            kwargs: Argumentos adicionales para la generación
-            
-        Returns:
-            str: Texto generado
-        """
-        try:
-            inputs = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
-            
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    inputs,
-                    max_length=len(inputs[0]) + kwargs.get("max_length", 512),
-                    temperature=kwargs.get("temperature", 0.7),
-                    top_p=kwargs.get("top_p", 0.9),
-                    top_k=kwargs.get("top_k", 50),
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-                
-                return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-                
-        except Exception as e:
-            logger.error(f"Error al generar texto localmente: {str(e)}")
-            raise
 
 # Clase para usar la API de OpenAI
 class OpenAIModel(BaseModel):
@@ -706,9 +548,8 @@ class OpenAIEmbedding:
 class RAGSystem:
     def __init__(
         self,
-        model_path: str = os.getenv('BASE_MODEL_PATH', 'models/finetuned_model'),
+        model_path: str = os.getenv('PRIMARY_MODEL', 'gpt-4o-mini'),
         embeddings_dir: str = os.getenv('EMBEDDINGS_DIR', 'data/embeddings'),
-        device: str = os.getenv('DEVICE', 'mps')
     ):
         """
         Inicializa el sistema RAG con OpenAI:
@@ -716,7 +557,6 @@ class RAGSystem:
         - Si falla, usa GPT-4.1 nano como fallback
         - Usa text-embedding-3-small para embeddings
         """
-        self.device = device
         self.embeddings_dir = Path(embeddings_dir)
         
         # Histórico de conversaciones
@@ -730,7 +570,7 @@ class RAGSystem:
             raise ValueError("Se requiere OPENAI_API_KEY para usar el sistema")
         
         # Modelos OpenAI
-        self.primary_model_name = os.getenv('PRIMARY_MODEL', 'gpt-4o-mini')
+        self.primary_model_name = model_path
         self.fallback_model_name = os.getenv('FALLBACK_MODEL', 'gpt-4.1-nano')
         self.embedding_model_name = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
         
@@ -814,46 +654,6 @@ class RAGSystem:
             except Exception as e2:
                 raise RuntimeError(f"No se pudo inicializar ningún modelo de OpenAI: {str(e2)}")
 
-    def _load_local_model(self, model_path: str):
-        """Carga el modelo local con la configuración apropiada"""
-        load_kwargs = {
-            "torch_dtype": torch.float16,
-            "device_map": "auto"
-        }
-        
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            **load_kwargs
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        
-        return LocalModel(model, tokenizer, self.device)
-
-    def _initialize_api_model(self) -> APIModel:
-        """Inicializa el modelo de API con fallback"""
-        if not self.api_token:
-            raise ValueError("Se requiere HUGGING_FACE_HUB_TOKEN para usar la API")
-            
-        try:
-            # Intentar primero con Mistral
-            model = APIModel(self.base_model, self.api_token)
-            # Verificar que funciona
-            model.generate("Test", max_length=10)
-            logger.info(f"Usando modelo principal via API: {self.base_model}")
-            return model
-        except Exception as e:
-            logger.warning(f"Error con modelo principal: {str(e)}")
-            logger.info(f"Intentando con modelo de fallback: {self.fallback_model}")
-            
-            try:
-                # Fallback a TinyLlama
-                model = APIModel(self.fallback_model, self.api_token)
-                # Verificar que funciona
-                model.generate("Test", max_length=10)
-                logger.info(f"Usando modelo de fallback via API: {self.fallback_model}")
-                return model
-            except Exception as e:
-                raise RuntimeError(f"No se pudo inicializar ningún modelo: {str(e)}")
 
     def _initialize_vector_store(self) -> VectorStore:
         """
@@ -1024,13 +824,11 @@ class RAGSystem:
 
     def generate_response(self, query: str, context: str, sources: List[str] = None) -> str:
         """
-        Genera una respuesta usando el modelo de lenguaje.
+        Genera una respuesta usando el LLM definido en el archivo .env.
         Optimizado para GPT-4o mini para producir respuestas concisas y relevantes.
         """
         # Seleccionar un emoji aleatorio para la respuesta
         emoji = random.choice(information_emojis)
-        
-        # Construir el prompt sin usar detección de intenciones
         
         # Versión completa de las FAQ
         faqs_complete = """
@@ -1117,10 +915,10 @@ SOBRE TI:
 - Fuiste creado para ayudar a responder preguntas sobre trámites, reglamentos y procedimientos
 - Cuando te pregunten sobre tu identidad, debes responder que eres DrCecim
 - No confundas preguntas sobre tu identidad con preguntas sobre la identidad del usuario
-- Cuando te pregunten como estas, o alguna relacionada a tu estado, debes responder que estas bien y listo para ayudar.
-- Solo saluda cuando el usuario te saluda por primera vez.
-- Siempre debes responder en modo casual, como un amigo.
-- Siempre debes responder en modo informal, como un mensaje de WhatsApp.
+- Cuando te pregunten como estas, o alguna relacionada a tu estado, debes responder que estas bien y listo para ayudar
+- IMPORTANTE: Solo debes saludar en tu primera interacción con el usuario. En las siguientes respuestas, ve directo al punto
+- Siempre debes responder en modo casual, como un amigo
+- Siempre debes responder en modo informal, como un mensaje de WhatsApp
 
 INFORMACIÓN RELEVANTE:
 {context}
@@ -1130,54 +928,49 @@ PREGUNTAS FRECUENTES:
 
 {sources_text}"""
 
-        user_message = f"""CONSULTA: {query}
+        # Agregar el historial de la conversación al mensaje del usuario
+        conversation_history = ""
+        if hasattr(self, 'user_history') and self.user_history:
+            conversation_history = "\nHISTORIAL DE LA CONVERSACIÓN:\n"
+            for entry in list(self.user_history.values())[0][-3:]:  # Últimas 3 interacciones
+                conversation_history += f"Usuario: {entry['query']}\nDrCecim: {entry['response']}\n"
+
+        user_message = f"""CONSULTA ACTUAL: {query}
+
+{conversation_history}
 
 RESPONDE SIGUIENDO ESTAS REGLAS:
-1. Sé muy conciso y directo.
-2. Usa la información de los documentos oficiales primero.
-3. Si hay documentos específicos, cita naturalmente su origen ("Según el reglamento...").
-4. NO uses NUNCA formato Markdown (como asteriscos para negrita o cursiva) ya que esto no se procesa correctamente en WhatsApp.
-5. Para enfatizar texto, usa MAYÚSCULAS, comillas o asteriscos.
-6. Usa viñetas con guiones (-) cuando sea útil para mayor claridad.
-7. Si la información está incompleta, sugiere contactar a @cecim.nemed por instagram.
-8. No hagas preguntas adicionales."""
+1. Sé muy conciso y directo
+2. Usa la información de los documentos oficiales primero
+3. Si hay documentos específicos, cita naturalmente su origen ("Según el reglamento...")
+4. NO uses NUNCA formato Markdown (como asteriscos para negrita o cursiva) ya que esto no se procesa correctamente en WhatsApp
+5. Para enfatizar texto, usa MAYÚSCULAS, comillas o asteriscos
+6. Usa viñetas con guiones (-) cuando sea útil para mayor claridad
+7. Si la información está incompleta, sugiere contactar a @cecim.nemed por instagram
+8. No hagas preguntas adicionales
+9. Si ya hubo un saludo previo en el historial, NO vuelvas a saludar"""
 
         # Llamada a la API de OpenAI con mensajes formatados
-        if isinstance(self.model, OpenAIModel):
-            messages = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_message}
-            ]
+        try:
+            # Obtener parámetros de generación de variables de entorno
+            temperature = float(os.getenv('TEMPERATURE', '0.7'))
+            top_p = float(os.getenv('TOP_P', '0.9'))
             
-            try:
-                # Obtener parámetros de generación de variables de entorno
-                temperature = float(os.getenv('TEMPERATURE', '0.7'))
-                top_p = float(os.getenv('TOP_P', '0.9'))
-                
-                response = openai.chat.completions.create(
-                    model=self.model.model_name,
-                    messages=messages,
-                    temperature=temperature,
-                    top_p=top_p,
-                    max_tokens=self.max_output_tokens,
-                    timeout=self.api_timeout
-                )
-                response_text = response.choices[0].message.content.strip()
-            except Exception as e:
-                logger.error(f"Error al generar respuesta con OpenAI: {str(e)}")
-                # Intentar con generación estándar como fallback
-                prompt = f"{system_message}\n\n{user_message}"
-                response_text = self.model.generate(prompt)
-        else:
-            # Fallback a método estándar (no debería ocurrir con la configuración actual)
-            prompt = f"{system_message}\n\n{user_message}"
-            response_text = self.model.generate(
-                prompt, 
-                temperature=float(os.getenv('TEMPERATURE', '0.7')),
-                top_p=float(os.getenv('TOP_P', '0.9')),
-                top_k=int(os.getenv('TOP_K', '50')),
-                max_tokens=self.max_output_tokens
+            response = openai.chat.completions.create(
+                model=self.model.model_name,
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=self.max_output_tokens,
+                timeout=self.api_timeout
             )
+            response_text = response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Error al generar respuesta con OpenAI: {str(e)}")
+            return f"{emoji} Lo siento, hubo un error al generar la respuesta. Por favor, intenta de nuevo o contacta a @cecim.nemed por instagram."
 
         # Eliminar cualquier formato Markdown que pueda haberse colado
         response_text = re.sub(r'\*\*(.+?)\*\*', r'\1', response_text)  # Eliminar negrita
@@ -1682,10 +1475,23 @@ Si se trata de la primera o segunda prórroga, el trámite se resuelve positivam
 
 def main():
     """Función principal para ejecutar el sistema RAG."""
+    # Verificar que existe la API key de OpenAI
+    if not os.getenv('OPENAI_API_KEY'):
+        print("Error: Se requiere OPENAI_API_KEY para usar el sistema")
+        return
+        
     # Inicializar sistema RAG
-    rag = RAGSystem()
+    try:
+        rag = RAGSystem()
+    except Exception as e:
+        print(f"Error al inicializar el sistema: {str(e)}")
+        return
     
     # Ejemplo de uso
+    print("\nBienvenido al sistema RAG de DrCecim")
+    print("Este sistema usa modelos de OpenAI para responder consultas sobre la Facultad de Medicina UBA")
+    print("Escribe 'salir' para terminar")
+    
     while True:
         query = input("\nIngrese su consulta (o 'salir' para terminar): ")
         if query.lower() == 'salir':
@@ -1694,11 +1500,10 @@ def main():
         try:
             result = rag.process_query(query)
             print("\nRespuesta:", result['response'])
-            for chunk in result['relevant_chunks']:
-                if 'filename' in chunk and 'chunk_index' in chunk:
-                    print(f"- {chunk['filename']} (chunk {chunk['chunk_index']})")
-                else:
-                    print(f"- {chunk.get('id', 'unknown')}")
+            if result.get('sources'):
+                print("\nFuentes consultadas:")
+                for source in result['sources']:
+                    print(f"- {source}")
         except Exception as e:
             logger.error(f"Error al procesar la consulta: {str(e)}")
             print("Lo siento, hubo un error al procesar tu consulta.")
