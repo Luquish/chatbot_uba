@@ -16,7 +16,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 import openai
 import time
 import uuid
-
+from datetime import datetime, timedelta, timezone
+from .calendar_service import CalendarService
 # Crear directorio de logs si no existe
 Path("logs").mkdir(exist_ok=True)
 
@@ -67,9 +68,9 @@ INTENT_EXAMPLES = {
             "explicame eso de nuevo",
             "acorta esa explicación",
             "simplifica lo que dijiste",
-            "dímelo más corto",
-            "dimelo mas corto",
-            "puedes abreviar",
+            "decimelo más corto",
+            "decime mas corto",
+            "lo pode abreviar?",
             "puedes hacer un resumen"
         ],
         'context': "El usuario está pidiendo un resumen o clarificación del mensaje anterior"
@@ -224,6 +225,46 @@ greeting_emojis = ["👋", "😊", "🤓", "👨‍⚕️", "👩‍⚕️", "�
 warning_emojis = ["⚠️", "❗", "⚡", "🚨"]
 success_emojis = ["✅", "💫", "🎉", "💡"]
 medical_emojis = ["🏥", "👨‍⚕️", "👩‍⚕️", "🩺"]
+
+# Configuraciones específicas para consultas de calendario
+CALENDAR_INTENT_MAPPING = {
+    'general': {
+        'keywords': ['eventos', 'que eventos hay', 'que hay esta semana', 'calendario', 'actividades', 'agenda'],
+        'no_events_message': "No encontré eventos programados en el calendario para esta semana. Te sugiero consultar @cecim.nemed por instagram"
+    },
+    'inscripcion': {
+        'keywords': ['inscripción', 'inscripciones', 'período de inscripción', 'anotarse', 'cuando me puedo inscribir', 'fecha de inscripcion', 'cuando me anoto'],
+        'no_events_message': "No encontré fechas de inscripción programadas en el calendario. Te sugiero consultar periódicamente o escribir a @cecim.nemed por instagram"
+    },
+    'examenes': {
+        'keywords': ['examen', 'exámenes', 'final', 'finales', 'parcial', 'parciales', 'cuando es el parcial', 'fecha del final', 'fechas de examenes'],
+        'no_events_message': "No encontré fechas de exámenes programadas en el calendario. Las fechas suelen publicarse con dos semanas de anticipación. Consultá @cecim.nemed por instagram"
+    },
+    'cursada': {
+        'keywords': ['inicio de cursada', 'fin de cursada', 'cursada', 'inicio de clases', 'cuando empiezan las clases', 'cuando arranca'],
+        'no_events_message': "No encontré fechas de inicio de cursada en el calendario. Te sugiero consultar en la cartelera de tu departamento o @cecim.nemed por instagram"
+    },
+    'administrativo': {
+        'keywords': ['trámite', 'trámites', 'administrativo', 'vencimiento', 'fecha limite', 'hasta cuando tengo tiempo', 'proximos feriados'],
+        'no_events_message': "No encontré fechas administrativas programadas. Te sugiero consultar en alumnos@fmed.uba.ar o @cecim.nemed por instagram"
+    }
+}
+
+CALENDAR_MESSAGES = {
+    'NO_EVENTS': 'No encontré eventos programados para ese período en el calendario académico.',
+    'ERROR_FETCH': 'Lo siento, no pude acceder al calendario académico en este momento. Por favor, intentá más tarde. Mientras tanto te podes comunicar con @cecim.nemed por instagram',
+    'MULTIPLE_EVENTS': 'Encontré varios eventos que coinciden con tu búsqueda:',
+    'NO_SPECIFIC_EVENT': 'No encontré eventos específicos que coincidan con tu búsqueda en el calendario.',
+    'PAST_EVENT': 'Ese evento ya pasó. ¿Querés que te muestre los próximos eventos similares?'
+}
+
+CALENDAR_SEARCH_CONFIG = {
+    'MAX_RESULTS': 5,  # Número máximo de resultados a devolver
+    'DEFAULT_TIMESPAN': 30,  # Días hacia adelante por defecto
+    'MAX_TIMESPAN': 180,  # Máximo número de días hacia adelante para buscar
+    'TIME_MIN': 'now',  # Comenzar búsqueda desde ahora
+    'TIME_ZONE': 'America/Argentina/Buenos_Aires'  # Zona horaria para las consultas
+}
 
 # Palabras clave para expansión de consultas
 QUERY_EXPANSIONS = {
@@ -545,6 +586,8 @@ class OpenAIEmbedding:
         else:
             return 1536
 
+
+
 class RAGSystem:
     def __init__(
         self,
@@ -552,10 +595,7 @@ class RAGSystem:
         embeddings_dir: str = os.getenv('EMBEDDINGS_DIR', 'data/embeddings'),
     ):
         """
-        Inicializa el sistema RAG con OpenAI:
-        - Usa GPT-4o mini de OpenAI como modelo principal
-        - Si falla, usa GPT-4.1 nano como fallback
-        - Usa text-embedding-3-small para embeddings
+        Inicializa el sistema RAG con OpenAI y el servicio de calendario.
         """
         self.embeddings_dir = Path(embeddings_dir)
         
@@ -606,6 +646,14 @@ class RAGSystem:
 
         # Configurar umbral de similitud
         self.similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD', '0.3'))
+
+        # Inicializar servicio de calendario
+        try:
+            self.calendar_service = CalendarService()
+            logger.info("Servicio de calendario inicializado correctamente")
+        except Exception as e:
+            logger.warning(f"No se pudo inicializar el servicio de calendario: {str(e)}")
+            self.calendar_service = None
 
     def _initialize_openai_model(self, model_name: str) -> OpenAIModel:
         """
@@ -907,8 +955,8 @@ class RAGSystem:
             formatted_sources = [self._format_source_name(src) for src in sources]
             sources_text = f"\nFUENTES CONSULTADAS:\n{', '.join(formatted_sources)}"
 
-        # Prompt optimizado para OpenAI
-        system_message = f"""Sos DrCecim, un asistente virtual especializado de la Facultad de Medicina UBA. Tu tarea es proporcionar respuestas son sobre administración y trámites de la facultad y deben ser breves, precisas y útiles.
+        # Obtener el historial de conversación en formato OpenAI
+        messages = [{"role": "system", "content": f"""Sos DrCecim, un asistente virtual especializado de la Facultad de Medicina UBA. Tu tarea es proporcionar respuestas son sobre administración y trámites de la facultad y deben ser breves, precisas y útiles.
 
 SOBRE TI:
 - Te llamas DrCecim y eres un asistente virtual de la Facultad de Medicina UBA
@@ -926,18 +974,16 @@ INFORMACIÓN RELEVANTE:
 PREGUNTAS FRECUENTES:
 {faqs_complete}
 
-{sources_text}"""
+FUENTES CONSULTADAS PARA CONSULTAS DE LA BASE DE CONOCIMIENTO:
+{sources_text}"""}]
 
-        # Agregar el historial de la conversación al mensaje del usuario
-        conversation_history = ""
-        if hasattr(self, 'user_history') and self.user_history:
-            conversation_history = "\nHISTORIAL DE LA CONVERSACIÓN:\n"
-            for entry in list(self.user_history.values())[0][-3:]:  # Últimas 3 interacciones
-                conversation_history += f"Usuario: {entry['query']}\nDrCecim: {entry['response']}\n"
+        # Agregar historial de conversación si existe
+        if self.user_history:
+            current_history = self.get_user_history(list(self.user_history.keys())[0])
+            messages.extend(current_history)
 
-        user_message = f"""CONSULTA ACTUAL: {query}
-
-{conversation_history}
+        # Agregar la consulta actual
+        messages.append({"role": "user", "content": f"""CONSULTA ACTUAL: {query}
 
 RESPONDE SIGUIENDO ESTAS REGLAS:
 1. Sé muy conciso y directo
@@ -948,7 +994,8 @@ RESPONDE SIGUIENDO ESTAS REGLAS:
 6. Usa viñetas con guiones (-) cuando sea útil para mayor claridad
 7. Si la información está incompleta, sugiere contactar a @cecim.nemed por instagram
 8. No hagas preguntas adicionales
-9. Si ya hubo un saludo previo en el historial, NO vuelvas a saludar"""
+9. Si ya hubo un saludo previo en el historial, NO vuelvas a saludar
+10. Si preguntan sobre una consulta anterior, revisa el historial y responde basándote en él"""})
 
         # Llamada a la API de OpenAI con mensajes formatados
         try:
@@ -958,10 +1005,7 @@ RESPONDE SIGUIENDO ESTAS REGLAS:
             
             response = openai.chat.completions.create(
                 model=self.model.model_name,
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": user_message}
-                ],
+                messages=messages,
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=self.max_output_tokens,
@@ -973,10 +1017,10 @@ RESPONDE SIGUIENDO ESTAS REGLAS:
             return f"{emoji} Lo siento, hubo un error al generar la respuesta. Por favor, intenta de nuevo o contacta a @cecim.nemed por instagram."
 
         # Eliminar cualquier formato Markdown que pueda haberse colado
-        response_text = re.sub(r'\*\*(.+?)\*\*', r'\1', response_text)  # Eliminar negrita
-        response_text = re.sub(r'\*(.+?)\*', r'\1', response_text)  # Eliminar cursiva
-        response_text = re.sub(r'\_\_(.+?)\_\_', r'\1', response_text)  # Eliminar subrayado
-        response_text = re.sub(r'\_(.+?)\_', r'\1', response_text)  # Eliminar cursiva con guiones bajos
+        response_text = re.sub(r'\*\*(.+?)\*\*', r'\1', response_text)
+        response_text = re.sub(r'\*(.+?)\*', r'\1', response_text)
+        response_text = re.sub(r'\_\_(.+?)\_\_', r'\1', response_text)
+        response_text = re.sub(r'\_(.+?)\_', r'\1', response_text)
 
         # Asegurar que la respuesta tenga el emoji (si no comienza ya con uno)
         emoji_pattern = r'[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]'
@@ -1182,18 +1226,46 @@ INSTRUCCIONES:
 
     def process_query(self, query: str, user_id: str = None, user_name: str = None) -> Dict[str, Any]:
         """
-        Procesa una consulta del usuario sin depender de detección de intenciones.
-        La comprensión de la consulta se delega al modelo de lenguaje.
-        
-        Args:
-            query (str): La consulta del usuario
-            user_id (str, optional): ID del usuario (número de teléfono)
-            user_name (str, optional): Nombre del usuario si está disponible
+        Procesa una consulta del usuario.
         """
         try:
             # Si no hay user_id, generar uno
             if user_id is None:
                 user_id = str(uuid.uuid4())
+            
+            # Verificar si es una consulta sobre eventos del calendario
+            query_lower = query.lower()
+            
+            # Detectar intención específica del calendario
+            calendar_intent = None
+            for intent, config in CALENDAR_INTENT_MAPPING.items():
+                if any(keyword in query_lower for keyword in config['keywords']):
+                    calendar_intent = intent
+                    break
+            
+            if calendar_intent:
+                try:
+                    calendar_response = self.get_calendar_events()
+                    if not calendar_response or calendar_response == CALENDAR_MESSAGES['NO_EVENTS']:
+                        # Si no hay eventos, usar el mensaje específico para esa intención
+                        calendar_response = CALENDAR_INTENT_MAPPING[calendar_intent]['no_events_message']
+                    
+                    return {
+                        "query": query,
+                        "response": calendar_response,
+                        "query_type": f"calendario_{calendar_intent}",
+                        "relevant_chunks": [],
+                        "sources": ["Calendario Académico"]
+                    }
+                except Exception as e:
+                    logger.error(f"Error al obtener eventos del calendario: {str(e)}")
+                    return {
+                        "query": query,
+                        "response": CALENDAR_MESSAGES['ERROR_FETCH'],
+                        "query_type": "calendario_error",
+                        "relevant_chunks": [],
+                        "sources": ["Calendario Académico"]
+                    }
             
             # Obtener historial de mensajes
             history = self.get_user_history(user_id)
@@ -1453,13 +1525,35 @@ Si se trata de la primera o segunda prórroga, el trámite se resuelve positivam
         return response, verification_score
 
     def get_user_history(self, user_id: str) -> list:
-        """Obtiene el historial de mensajes del usuario."""
+        """
+        Obtiene el historial de mensajes del usuario en formato OpenAI.
+        
+        Args:
+            user_id (str): ID del usuario
+            
+        Returns:
+            list: Lista de mensajes en formato OpenAI [{"role": "user/assistant", "content": "..."}]
+        """
         if user_id not in self.user_history:
-            self.user_history[user_id] = []
-        return self.user_history[user_id]
+            return []
+        
+        messages = []
+        for entry in self.user_history[user_id][-5:]:  # Últimos 5 mensajes
+            messages.extend([
+                {"role": "user", "content": entry["query"]},
+                {"role": "assistant", "content": entry["response"]}
+            ])
+        return messages
 
     def update_user_history(self, user_id: str, query: str, response: str):
-        """Actualiza el historial de mensajes del usuario."""
+        """
+        Actualiza el historial de mensajes del usuario.
+        
+        Args:
+            user_id (str): ID del usuario
+            query (str): Consulta del usuario
+            response (str): Respuesta del sistema
+        """
         if user_id not in self.user_history:
             self.user_history[user_id] = []
         
@@ -1470,8 +1564,59 @@ Si se trata de la primera o segunda prórroga, el trámite se resuelve positivam
             "timestamp": time.time()
         })
         
-        # Limitar a los últimos 5 mensajes
-        self.user_history[user_id] = self.user_history[user_id][-5:]
+        # Mantener solo los últimos 5 mensajes
+        if len(self.user_history[user_id]) > 5:
+            self.user_history[user_id] = self.user_history[user_id][-5:]
+
+    def get_calendar_events(self) -> str:
+        """
+        Obtiene y formatea los eventos del calendario para la semana actual.
+        
+        Returns:
+            str: Mensaje formateado con los eventos encontrados
+        """
+        if not self.calendar_service:
+            return "Lo siento, el servicio de calendario no está disponible en este momento."
+            
+        try:
+            events = self.calendar_service.get_events_this_week()
+            
+            if not events:
+                return "No encontré eventos programados para esta semana."
+                
+            # Formatear respuesta
+            response_parts = ["Estos son los eventos de esta semana:"]
+            
+            for event in events:
+                summary = event['summary']
+                start = event['start']
+                end = event['end']
+                
+                # Convertir las fechas a un formato más amigable
+                try:
+                    start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
+                    end_dt = datetime.fromisoformat(end.replace('Z', '+00:00'))
+                    
+                    # Ajustar a zona horaria local (Argentina)
+                    start_dt = start_dt.astimezone(timezone(timedelta(hours=-3)))
+                    end_dt = end_dt.astimezone(timezone(timedelta(hours=-3)))
+                    
+                    event_str = f"\n- {summary}"
+                    event_str += f"\n  Comienza: {start_dt.strftime('%A %d/%m/%Y %H:%M')}"
+                    event_str += f"\n  Termina: {end_dt.strftime('%A %d/%m/%Y %H:%M')}"
+                    
+                    response_parts.append(event_str)
+                except ValueError:
+                    # Si la fecha no está en formato datetime, usar el string original
+                    event_str = f"\n- {summary}"
+                    event_str += f"\n  Fecha: {start} - {end}"
+                    response_parts.append(event_str)
+            
+            return "\n".join(response_parts)
+            
+        except Exception as e:
+            logger.error(f"Error al obtener eventos del calendario: {str(e)}")
+            return "Lo siento, hubo un error al consultar los eventos del calendario."
 
 def main():
     """Función principal para ejecutar el sistema RAG."""
