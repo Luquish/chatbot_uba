@@ -1,6 +1,5 @@
 import os
 import logging
-import requests
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 import torch
@@ -8,7 +7,6 @@ import faiss
 import pandas as pd
 from dotenv import load_dotenv
 import numpy as np
-import psutil
 import re
 import random
 from unidecode import unidecode
@@ -228,25 +226,29 @@ medical_emojis = ["🏥", "👨‍⚕️", "👩‍⚕️", "🩺"]
 
 # Configuraciones específicas para consultas de calendario
 CALENDAR_INTENT_MAPPING = {
-    'general': {
-        'keywords': ['eventos', 'que eventos hay', 'que hay esta semana', 'calendario', 'actividades', 'agenda'],
-        'no_events_message': "No encontré eventos programados en el calendario para esta semana. Te sugiero consultar @cecim.nemed por instagram"
-    },
-    'inscripcion': {
-        'keywords': ['inscripción', 'inscripciones', 'período de inscripción', 'anotarse', 'cuando me puedo inscribir', 'fecha de inscripcion', 'cuando me anoto'],
-        'no_events_message': "No encontré fechas de inscripción programadas en el calendario. Te sugiero consultar periódicamente o escribir a @cecim.nemed por instagram"
-    },
     'examenes': {
-        'keywords': ['examen', 'exámenes', 'final', 'finales', 'parcial', 'parciales', 'cuando es el parcial', 'fecha del final', 'fechas de examenes'],
-        'no_events_message': "No encontré fechas de exámenes programadas en el calendario. Las fechas suelen publicarse con dos semanas de anticipación. Consultá @cecim.nemed por instagram"
+        'keywords': ['examen', 'examenes', 'parcial', 'parciales', 'final', 'finales', 'evaluación'],
+        'tool': 'get_events_by_type',
+        'params': {'calendar_type': 'examenes'},
+        'no_events_message': 'No hay exámenes programados en este momento.'
+    },
+    'inscripciones': {
+        'keywords': ['inscripción', 'inscripciones', 'inscribir', 'anotar', 'anotarse', 'reasignación'],
+        'tool': 'get_events_by_type',
+        'params': {'calendar_type': 'inscripciones'},
+        'no_events_message': 'No hay eventos de inscripción programados en este momento.'
     },
     'cursada': {
-        'keywords': ['inicio de cursada', 'fin de cursada', 'cursada', 'inicio de clases', 'cuando empiezan las clases', 'cuando arranca'],
-        'no_events_message': "No encontré fechas de inicio de cursada en el calendario. Te sugiero consultar en la cartelera de tu departamento o @cecim.nemed por instagram"
+        'keywords': ['cursada', 'cursadas', 'cuatrimestre', 'inicio', 'fin', 'final', 'comienzo', 'fin de cursada', 'vacaciones'],
+        'tool': 'get_events_by_type',
+        'params': {'calendar_type': 'cursada'},
+        'no_events_message': 'No hay información sobre cursadas en este momento.'
     },
-    'administrativo': {
-        'keywords': ['trámite', 'trámites', 'administrativo', 'vencimiento', 'fecha limite', 'hasta cuando tengo tiempo', 'proximos feriados'],
-        'no_events_message': "No encontré fechas administrativas programadas. Te sugiero consultar en alumnos@fmed.uba.ar o @cecim.nemed por instagram"
+    'tramites': {
+        'keywords': ['trámite', 'tramite', 'trámites', 'tramites', 'documentación', 'documentacion', 'administrativo'],
+        'tool': 'get_events_by_type',
+        'params': {'calendar_type': 'tramites'},
+        'no_events_message': 'No hay trámites programados en este momento.'
     }
 }
 
@@ -1150,7 +1152,7 @@ RESPONDE SIGUIENDO ESTAS REGLAS:
         # Personalizar el prompt según si tenemos el nombre del usuario
         user_context = f"El usuario se llama {user_name}. " if user_name else ""
         
-        prompt = f"""[INST]
+        prompt = f"""
 Como DrCecim, un asistente virtual de la Facultad de Medicina de la UBA:
 - Usa un tono amigable y profesional
 - Mantén las respuestas breves y directas
@@ -1169,7 +1171,7 @@ Instrucciones específicas:
 - Si es una consulta médica: Explica amablemente que no puedes responder consultas médicas
 - Si preguntan tu identidad: Explica que eres un asistente virtual de la facultad, sin saludar nuevamente
 
-[/INST]"""
+"""
 
         return self.model.generate(prompt)
 
@@ -1236,24 +1238,32 @@ INSTRUCCIONES:
             # Verificar si es una consulta sobre eventos del calendario
             query_lower = query.lower()
             
-            # Detectar intención específica del calendario
+            # Detectar intención específica del calendario y palabras clave temporales
             calendar_intent = None
+            has_temporal_keywords = any(word in query_lower for word in [
+                'cuando', 'fecha', 'día', 'dia', 'mes', 'semana', 'hoy', 'mañana',
+                'proximo', 'próximo', 'siguiente', 'este', 'esta'
+            ])
+            
+            # Primero intentar encontrar una intención específica
             for intent, config in CALENDAR_INTENT_MAPPING.items():
                 if any(keyword in query_lower for keyword in config['keywords']):
                     calendar_intent = intent
                     break
             
-            if calendar_intent:
+            # Si encontramos una intención de calendario o palabras temporales
+            if calendar_intent or has_temporal_keywords:
                 try:
-                    calendar_response = self.get_calendar_events()
+                    calendar_response = self.get_calendar_events(calendar_intent)
                     if not calendar_response or calendar_response == CALENDAR_MESSAGES['NO_EVENTS']:
                         # Si no hay eventos, usar el mensaje específico para esa intención
-                        calendar_response = CALENDAR_INTENT_MAPPING[calendar_intent]['no_events_message']
+                        if calendar_intent in CALENDAR_INTENT_MAPPING:
+                            calendar_response = CALENDAR_INTENT_MAPPING[calendar_intent]['no_events_message']
                     
                     return {
                         "query": query,
                         "response": calendar_response,
-                        "query_type": f"calendario_{calendar_intent}",
+                        "query_type": f"calendario_{calendar_intent if calendar_intent else 'general'}",
                         "relevant_chunks": [],
                         "sources": ["Calendario Académico"]
                     }
@@ -1568,10 +1578,13 @@ Si se trata de la primera o segunda prórroga, el trámite se resuelve positivam
         if len(self.user_history[user_id]) > 5:
             self.user_history[user_id] = self.user_history[user_id][-5:]
 
-    def get_calendar_events(self) -> str:
+    def get_calendar_events(self, calendar_intent: str = None) -> str:
         """
-        Obtiene y formatea los eventos del calendario para la semana actual.
+        Obtiene y formatea los eventos del calendario según la intención.
         
+        Args:
+            calendar_intent (str): Tipo de eventos a buscar (examenes, inscripciones, etc.)
+            
         Returns:
             str: Mensaje formateado con los eventos encontrados
         """
@@ -1579,38 +1592,55 @@ Si se trata de la primera o segunda prórroga, el trámite se resuelve positivam
             return "Lo siento, el servicio de calendario no está disponible en este momento."
             
         try:
-            events = self.calendar_service.get_events_this_week()
+            events = []
+            
+            # Si hay una intención específica, usar el método correspondiente
+            if calendar_intent and calendar_intent in CALENDAR_INTENT_MAPPING:
+                intent_config = CALENDAR_INTENT_MAPPING[calendar_intent]
+                tool = intent_config['tool']
+                
+                if tool == 'get_events_by_type':
+                    calendar_type = intent_config['params']['calendar_type']
+                    events = self.calendar_service.get_events_by_type(calendar_type)
+                elif tool == 'get_events_by_date_range':
+                    # Implementar lógica para rango de fechas si es necesario
+                    events = self.calendar_service.get_events_by_date_range()
+                elif tool == 'get_upcoming_events':
+                    events = self.calendar_service.get_upcoming_events()
+            else:
+                # Si no hay intención específica, mostrar eventos de la semana
+                events = self.calendar_service.get_events_this_week()
             
             if not events:
-                return "No encontré eventos programados para esta semana."
+                if calendar_intent and calendar_intent in CALENDAR_INTENT_MAPPING:
+                    return CALENDAR_INTENT_MAPPING[calendar_intent]['no_events_message']
+                return "No encontré eventos programados para este período."
                 
             # Formatear respuesta
-            response_parts = ["Estos son los eventos de esta semana:"]
+            response_parts = ["📅 Eventos encontrados:"]
             
             for event in events:
                 summary = event['summary']
                 start = event['start']
                 end = event['end']
+                event_type = event.get('calendar_type', 'general')
                 
-                # Convertir las fechas a un formato más amigable
-                try:
-                    start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                    end_dt = datetime.fromisoformat(end.replace('Z', '+00:00'))
-                    
-                    # Ajustar a zona horaria local (Argentina)
-                    start_dt = start_dt.astimezone(timezone(timedelta(hours=-3)))
-                    end_dt = end_dt.astimezone(timezone(timedelta(hours=-3)))
-                    
-                    event_str = f"\n- {summary}"
-                    event_str += f"\n  Comienza: {start_dt.strftime('%A %d/%m/%Y %H:%M')}"
-                    event_str += f"\n  Termina: {end_dt.strftime('%A %d/%m/%Y %H:%M')}"
-                    
-                    response_parts.append(event_str)
-                except ValueError:
-                    # Si la fecha no está en formato datetime, usar el string original
-                    event_str = f"\n- {summary}"
-                    event_str += f"\n  Fecha: {start} - {end}"
-                    response_parts.append(event_str)
+                # Emoji según tipo de evento
+                event_emoji = {
+                    'examenes': '📝',
+                    'inscripciones': '✍️',
+                    'cursada': '📚',
+                    'tramites': '📋'
+                }.get(event_type, '📌')
+                
+                event_str = f"\n{event_emoji} {summary}"
+                event_str += f"\n  Comienza: {start}"
+                event_str += f"\n  Termina: {end}"
+                
+                if event.get('description'):
+                    event_str += f"\n  Detalles: {event['description']}"
+                
+                response_parts.append(event_str)
             
             return "\n".join(response_parts)
             
