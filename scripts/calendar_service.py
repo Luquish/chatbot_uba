@@ -15,7 +15,7 @@ import sys
 # Añadir el directorio raíz al path de Python
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config.calendar_config import CALENDAR_CONFIG, DATE_FORMAT, CALENDARS
+from config.calendar_config import CALENDAR_CONFIG, CALENDARS
 from scripts.date_utils import DateUtils
 
 # Configurar logging

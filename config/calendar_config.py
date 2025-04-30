@@ -47,9 +47,3 @@ CALENDAR_CONFIG = {
     'MAX_RESULTS': 10,
     'TIMEZONE': 'America/Argentina/Buenos_Aires'
 }
-
-# Formato de fechas para respuestas
-DATE_FORMAT = {
-    'DATETIME': '%A %d/%m/%Y %H:%M',
-    'DATE': '%A %d/%m/%Y'
-}

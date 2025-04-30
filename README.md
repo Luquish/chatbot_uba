@@ -119,72 +119,122 @@ python scripts/auto_setup.py
 
 ## Flujo de Trabajo
 
-### 1. Procesamiento de Documentos
+### Desarrollo Local
 
-Convierte documentos PDF a formato procesable:
-
+1. **Procesamiento de Documentos:**
 ```bash
 python scripts/preprocess.py
 ```
-
 Este script:
-- Utiliza Marker PDF para extraer texto de documentos PDF
-- Convierte documentos a formato Markdown
-- Divide el texto en chunks optimizados para RAG
-- Genera metadatos para cada documento y chunk
+- Procesa los PDFs en `data/raw/`
+- Genera chunks optimizados
+- Guarda los resultados en `data/processed/`
 
-### 2. Generación de Embeddings
-
-Genera embeddings para los chunks procesados:
-
+2. **Generación de Embeddings:**
 ```bash
 python scripts/create_embeddings.py
 ```
-
 Este script:
-- Utiliza OpenAI para generar embeddings de alta calidad
-- Crea un índice FAISS para búsqueda eficiente
-- Almacena metadatos para cada embedding
+- Genera embeddings usando OpenAI
+- Crea y guarda el índice FAISS
+- Almacena metadatos necesarios
 
-### 3. Fine-tuning del Modelo (Opcional)
-
-Ajusta un modelo para mejorar respuestas específicas:
-
-```bash
-python scripts/train_finetune.py
-```
-
-Este script:
-- Prepara datos de entrenamiento en formato OpenAI
-- Crea y monitorea un trabajo de fine-tuning
-- Guarda información del modelo fine-tuneado
-
-### 4. Despliegue del Backend
-
-Inicia el servidor FastAPI y configura webhooks:
-
+3. **Ejecución Local:**
 ```bash
 python scripts/deploy_backend.py
 ```
 
-Este script:
-- Inicia el servidor FastAPI
-- Configura rutas para webhooks de WhatsApp
-- Maneja mensajes entrantes y procesa respuestas
+### Despliegue con Docker
 
-### 5. Configuración Automática (Desarrollo)
+El proyecto está configurado para ser desplegado usando Docker, separando el procesamiento de documentos (local) de la ejecución del servidor (producción).
 
-Para desarrollo local con ngrok:
+#### Estructura Docker
 
-```bash
-python scripts/auto_setup.py
+```
+.
+├── Dockerfile           # Configuración de la imagen
+├── docker-compose.yml   # Configuración del servicio
+└── .dockerignore       # Archivos excluidos del contenedor
 ```
 
-Este script:
-- Inicia el backend en segundo plano
-- Configura ngrok para crear una URL pública
-- Verifica la validez del token de WhatsApp
-- Muestra instrucciones de configuración
+#### Archivos en Producción
+
+Solo los archivos necesarios para la ejecución se incluyen en el contenedor:
+- `scripts/deploy_backend.py`
+- `scripts/run_rag.py`
+- `scripts/calendar_service.py`
+- `scripts/date_utils.py`
+- `data/embeddings/`
+- `config/calendar_config.py`
+
+#### Comandos Docker
+
+1. **Construir la imagen:**
+```bash
+docker-compose build
+```
+
+2. **Iniciar el contenedor:**
+```bash
+docker-compose up -d
+```
+
+3. **Ver logs:**
+```bash
+docker-compose logs -f
+```
+
+4. **Detener el contenedor:**
+```bash
+docker-compose down
+```
+
+#### Variables de Entorno para Producción
+
+Crear un archivo `.env` con:
+```env
+# Configuración del entorno
+ENVIRONMENT=production
+HOST=0.0.0.0
+PORT=8000
+
+# WhatsApp Business API
+WHATSAPP_API_TOKEN=your_token_here
+WHATSAPP_PHONE_NUMBER_ID=your_phone_id_here
+WHATSAPP_BUSINESS_ACCOUNT_ID=your_business_account_id_here
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_webhook_token_here
+
+# OpenAI
+OPENAI_API_KEY=your_openai_key_here
+
+# Configuración del modelo
+PRIMARY_MODEL=gpt-4o-mini
+EMBEDDING_MODEL=text-embedding-3-small
+```
+
+### Flujo de Actualización de Documentos
+
+1. Añadir nuevos PDFs en `data/raw/`
+2. Ejecutar localmente el preprocesamiento:
+   ```bash
+   python scripts/preprocess.py
+   python scripts/create_embeddings.py
+   ```
+3. Los nuevos embeddings se generarán en `data/embeddings/`
+4. El contenedor Docker montará automáticamente los nuevos embeddings
+
+### Endpoints Disponibles
+
+- `GET /health`: Estado del servicio
+- `POST /chat`: Endpoint para consultas directas
+- `POST /webhook/whatsapp`: Webhook para mensajes de WhatsApp
+- `GET /test-message`: Envía mensaje de prueba
+
+### Monitoreo y Mantenimiento
+
+- Los logs se encuentran en la carpeta `logs/`
+- El healthcheck verifica el servicio cada 30 segundos
+- El contenedor se reinicia automáticamente en caso de fallo
 
 ## Requisitos
 

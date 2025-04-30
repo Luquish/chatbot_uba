@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# Local development
+.env
+.env.local
+.env.*.local
+
+# Data directories (excepto embeddings que necesitamos)
+data/raw/
+data/processed/
+notebooks/
+
+# Scripts de preprocesamiento (no necesarios en producción)
+scripts/preprocess.py
+scripts/create_embeddings.py
+scripts/train_finetune.py 
