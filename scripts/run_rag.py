@@ -15,7 +15,7 @@ import openai
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from .calendar_service import CalendarService
+from calendar_service import CalendarService
 # Crear directorio de logs si no existe
 Path("logs").mkdir(exist_ok=True)
 

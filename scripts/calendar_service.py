@@ -4,12 +4,17 @@ Solo lectura de eventos públicos usando API Key.
 """
 
 import os
+import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-import logging
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import pytz
+import sys
+
+# Añadir el directorio raíz al path de Python
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from config.calendar_config import CALENDAR_CONFIG, DATE_FORMAT, CALENDARS
 from scripts.date_utils import DateUtils
 

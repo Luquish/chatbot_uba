@@ -251,21 +251,18 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """
-    Inicializa el sistema RAG al iniciar la aplicación
-    """
+    """Inicializa el sistema RAG al iniciar el servidor."""
+    global rag_system, rag_initialized
     try:
-        global rag_system, rag_initialized
         logger.info("Iniciando sistema RAG...")
         rag_system = RAGSystem(
-            embeddings_dir='data/embeddings',
-            device='mps'  # Usar MPS en Mac, 'cuda' para GPU NVIDIA, 'cpu' para otros
+            embeddings_dir='data/embeddings'
         )
         rag_initialized = True
         logger.info("Sistema RAG inicializado correctamente")
     except Exception as e:
-        logger.error(f"Error al inicializar sistema RAG: {str(e)}", exc_info=True)
-        rag_initialized = False
+        logger.error(f"Error al inicializar sistema RAG: {str(e)}")
+        raise e
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
@@ -752,24 +749,22 @@ async def test_webhook():
 
 def main():
     """Función principal para ejecutar el servidor."""
-    # Configuración del servidor desde variables de entorno
-    host = os.getenv('HOST', '0.0.0.0')
-    port = int(os.getenv('PORT', 8000))
-    
-    logger.info(f"Iniciando servidor en {host}:{port}")
-    logger.info(f"Entorno: {ENVIRONMENT}")
-    logger.info(f"Ruta del modelo: data/embeddings")
-    logger.info(f"Ruta de embeddings: data/embeddings")
-    if MY_PHONE_NUMBER:
+    try:
+        # Obtener configuración del servidor
+        host = os.getenv('HOST', '0.0.0.0')
+        port = int(os.getenv('PORT', 8080))
+        
+        logger.info(f"Iniciando servidor en {host}:{port}")
+        logger.info(f"Entorno: {ENVIRONMENT}")
+        logger.info(f"Ruta del modelo: {os.getenv('MODEL_PATH', 'data/embeddings')}")
+        logger.info(f"Ruta de embeddings: {os.getenv('EMBEDDINGS_DIR', 'data/embeddings')}")
         logger.info(f"Número de prueba configurado: {MY_PHONE_NUMBER}")
-    
-    # Iniciar servidor
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        log_level="info"
-    )
+        
+        # Iniciar servidor
+        uvicorn.run("deploy_backend:app", host=host, port=port, reload=True)
+    except Exception as e:
+        logger.error(f"Error al iniciar servidor: {str(e)}")
+        raise e
 
 if __name__ == "__main__":
     main() 
