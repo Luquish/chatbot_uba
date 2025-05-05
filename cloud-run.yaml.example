@@ -10,6 +10,7 @@ spec:
       annotations:
         run.googleapis.com/execution-environment: gen2
         run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/startup-cpu-boost: "true"
     spec:
       serviceAccountName: chatbot-serviceaccount@[PROJECT_ID].iam.gserviceaccount.com
       containers:
@@ -19,35 +20,64 @@ spec:
           value: "production"
         - name: HOST
           value: "0.0.0.0"
-        - name: PORT
-          value: "8000"
+        - name: GCS_BUCKET_NAME
+          value: "uba-chatbot-embeddings"
+        - name: MY_PHONE_NUMBER
+          value: "+[PHONE_NUMBER]"  # Número para pruebas
         - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
               name: openai-credentials
-              key: api-key
+              key: latest
         - name: WHATSAPP_API_TOKEN
           valueFrom:
             secretKeyRef:
               name: whatsapp-credentials
-              key: api-token
+              key: latest
         - name: WHATSAPP_PHONE_NUMBER_ID
           valueFrom:
             secretKeyRef:
-              name: whatsapp-credentials
-              key: phone-number-id
+              name: whatsapp-phone-number-id
+              key: latest
         - name: WHATSAPP_BUSINESS_ACCOUNT_ID
           valueFrom:
             secretKeyRef:
-              name: whatsapp-credentials
-              key: business-account-id
+              name: whatsapp-business-account-id
+              key: latest
         - name: WHATSAPP_WEBHOOK_VERIFY_TOKEN
           valueFrom:
             secretKeyRef:
-              name: whatsapp-credentials
-              key: webhook-verify-token
+              name: whatsapp-webhook-verify-token
+              key: latest
+        # Google Calendar API configuration
+        - name: CALENDAR_ID_EXAMENES
+          valueFrom:
+            secretKeyRef:
+              name: calendar-id-examenes
+              key: latest
+        - name: CALENDAR_ID_INSCRIPCIONES
+          valueFrom:
+            secretKeyRef:
+              name: calendar-id-inscripciones
+              key: latest
+        - name: CALENDAR_ID_CURSADA
+          valueFrom:
+            secretKeyRef:
+              name: calendar-id-cursada
+              key: latest
+        - name: CALENDAR_ID_TRAMITES
+          valueFrom:
+            secretKeyRef:
+              name: calendar-id-tramites
+              key: latest
+        - name: GOOGLE_CALENDAR_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: google-calendar-api-key
+              key: latest
         ports:
-        - containerPort: 8000
+        - containerPort: 8080
+          name: http1
         resources:
           limits:
             cpu: "1"

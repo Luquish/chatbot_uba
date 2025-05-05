@@ -15,6 +15,7 @@ COPY scripts/run_rag.py scripts/
 COPY scripts/calendar_service.py scripts/
 COPY scripts/date_utils.py scripts/
 COPY scripts/gcs_storage.py scripts/
+COPY scripts/__init__.py scripts/
 COPY config/calendar_config.py config/
 
 # Instalar dependencias de Python

@@ -164,6 +164,8 @@ Solo los archivos necesarios para la ejecución se incluyen en el contenedor:
 - `scripts/run_rag.py`
 - `scripts/calendar_service.py`
 - `scripts/date_utils.py`
+- `scripts/gcs_storage.py`
+- `scripts/__init__.py`
 - `data/embeddings/`
 - `config/calendar_config.py`
 
@@ -323,7 +325,7 @@ gcloud secrets add-iam-policy-binding whatsapp-webhook-verify-token \
     --role="roles/secretmanager.secretAccessor"
 
 # Permitir a Cloud Run acceder al bucket de GCS
-gsutil iam ch serviceAccount:$SERVICE_ACCOUNT:objectViewer gs://uba-chatbot-embeddings
+gsutil iam ch serviceAccount:$SERVICE_ACCOUNT:objectViewer gs://[BUCKET_NAME]
 ```
 
 ### Adaptaciones para Google Cloud Storage
@@ -339,238 +341,101 @@ Esta adaptación está implementada en el módulo `scripts/gcs_storage.py`, que 
 - Leer archivos como strings o datos binarios directamente desde GCS
 - Cargar índices FAISS y sus metadatos desde GCS
 
-### Construcción de imagen multiplataforma para Cloud Run
+### Despliegue paso a paso en Google Cloud Run
 
-Cloud Run ejecuta contenedores en arquitectura x86_64 (amd64). Si estás desarrollando en una máquina con arquitectura diferente (como Apple Silicon/ARM), debes construir específicamente para amd64:
+1. **Verificar el archivo Dockerfile**:
+   Asegúrate de que el Dockerfile incluya todos los archivos necesarios, especialmente `scripts/__init__.py`:
+   ```dockerfile
+   # Copiar solo los archivos necesarios para producción
+   COPY requirements-prod.txt .
+   COPY scripts/deploy_backend.py scripts/
+   COPY scripts/run_rag.py scripts/
+   COPY scripts/calendar_service.py scripts/
+   COPY scripts/date_utils.py scripts/
+   COPY scripts/gcs_storage.py scripts/
+   COPY scripts/__init__.py scripts/
+   COPY config/calendar_config.py config/
+   ```
 
-```bash
-# Construir imagen específica para amd64 con Docker BuildX
-docker buildx build --platform linux/amd64 -t uba-chatbot:latest .
+2. **Construir imagen Docker para arquitectura amd64** (necesario para Cloud Run):
+   ```bash
+   docker buildx build --platform linux/amd64 -t uba-chatbot:latest .
+   docker tag uba-chatbot:latest gcr.io/[PROJECT_ID]/uba-chatbot:latest
+   ```
 
-# Etiquetar la imagen para Google Container Registry
-docker tag uba-chatbot:latest gcr.io/[PROJECT_ID]/uba-chatbot:amd64
+3. **Autenticar Docker con Google Cloud y subir imagen**:
+   ```bash
+   gcloud auth configure-docker
+   docker push gcr.io/[PROJECT_ID]/uba-chatbot:latest
+   ```
 
-# Subir la imagen a Google Container Registry
-docker push gcr.io/[PROJECT_ID]/uba-chatbot:amd64
-```
+4. **Crear archivo cloud-run.yaml** basado en el ejemplo:
+   ```bash
+   cp cloud-run.yaml.example cloud-run.yaml
+   # Editar cloud-run.yaml para reemplazar los placeholders con tus valores reales
+   ```
 
-### Configuración de Cloud Run (cloud-run.yaml)
+5. **Configurar anotaciones importantes en cloud-run.yaml**:
+   ```yaml
+   run.googleapis.com/startup-probe-failure-threshold: "5"
+   ```
+   Esta anotación es crucial para dar más tiempo al contenedor para inicializarse, especialmente cuando carga embeddings desde GCS.
 
-Crea un archivo `cloud-run.yaml` en la raíz del proyecto con la siguiente configuración:
+6. **Desplegar en Cloud Run**:
+   ```bash
+   gcloud run services replace cloud-run.yaml --region=[REGION]
+   ```
 
-```yaml
-apiVersion: serving.knative.dev/v1
-kind: Service
-metadata:
-  name: [SERVICE_NAME]
-spec:
-  template:
-    metadata:
-      annotations:
-        run.googleapis.com/execution-environment: gen2
-        run.googleapis.com/cpu-throttling: "true"
-        run.googleapis.com/startup-cpu-boost: "true"
-    spec:
-      serviceAccountName: [SERVICE_ACCOUNT_NAME]@[PROJECT_ID].iam.gserviceaccount.com
-      containers:
-      - image: gcr.io/[PROJECT_ID]/[IMAGE_NAME]:amd64
-        env:
-        - name: ENVIRONMENT
-          value: "production"
-        - name: HOST
-          value: "0.0.0.0"
-        - name: GCS_BUCKET_NAME
-          value: "[BUCKET_NAME]"
-        - name: MY_PHONE_NUMBER
-          value: "+[PHONE_NUMBER]"  # Número para pruebas (opcional)
-        - name: OPENAI_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: openai-credentials
-              key: latest
-        - name: WHATSAPP_API_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: whatsapp-credentials
-              key: latest
-        - name: WHATSAPP_PHONE_NUMBER_ID
-          valueFrom:
-            secretKeyRef:
-              name: whatsapp-phone-number-id
-              key: latest
-        - name: WHATSAPP_BUSINESS_ACCOUNT_ID
-          valueFrom:
-            secretKeyRef:
-              name: whatsapp-business-account-id
-              key: latest
-        - name: WHATSAPP_WEBHOOK_VERIFY_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: whatsapp-webhook-verify-token
-              key: latest
-        resources:
-          limits:
-            cpu: "1"
-            memory: "2Gi"
-```
+7. **Permitir acceso público** (necesario para webhooks de WhatsApp):
+   ```bash
+   gcloud run services add-iam-policy-binding [SERVICE_NAME] \
+     --member="allUsers" \
+     --role="roles/run.invoker" \
+     --region=[REGION]
+   ```
 
-### Despliegue en Cloud Run
+8. **Verificar el despliegue**:
+   ```bash
+   # Obtener URL del servicio
+   gcloud run services describe [SERVICE_NAME] --region=[REGION] --format="value(status.url)"
+   
+   # Verificar el estado del servicio
+   curl -v [SERVICE_URL]/health
+   
+   # Probar el webhook de WhatsApp (con el token real)
+   curl -v "[SERVICE_URL]/webhook/whatsapp?hub.mode=subscribe&hub.challenge=12345&hub.verify_token=[YOUR_VERIFY_TOKEN]"
+   
+   # Enviar un mensaje de prueba
+   curl -v [SERVICE_URL]/test-webhook
+   ```
 
-#### Método 1: Despliegue con archivo YAML
-```bash
-# Desplegar en Cloud Run usando el archivo YAML
-gcloud run services replace cloud-run.yaml --region=[REGION]
-```
+9. **Configurar en WhatsApp Business**:
+   1. Ve al [Facebook Developer Portal](https://developers.facebook.com/)
+   2. Selecciona tu app de WhatsApp Business
+   3. Navega a "WhatsApp" > "API Setup" > "Configuration"
+   4. En "Webhook", configura:
+      - **Callback URL**: `[SERVICE_URL]/webhook/whatsapp`
+      - **Verify Token**: El token configurado en `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+   5. Selecciona los eventos: `messages`, `message_deliveries`, `message_reads`
+   6. Haz clic en "Verify and Save"
 
-#### Método 2: Despliegue con comandos
-```bash
-# Desplegar en Cloud Run directamente con comando
-gcloud run deploy [SERVICE_NAME] \
-  --image=gcr.io/[PROJECT_ID]/[IMAGE_NAME]:amd64 \
-  --platform=managed \
-  --region=[REGION] \
-  --allow-unauthenticated \
-  --service-account=[SERVICE_ACCOUNT_NAME]@[PROJECT_ID].iam.gserviceaccount.com \
-  --set-env-vars="ENVIRONMENT=production,HOST=0.0.0.0,GCS_BUCKET_NAME=[BUCKET_NAME],MY_PHONE_NUMBER=+[PHONE_NUMBER]" \
-  --set-secrets="OPENAI_API_KEY=openai-credentials:latest,WHATSAPP_API_TOKEN=whatsapp-credentials:latest,WHATSAPP_PHONE_NUMBER_ID=whatsapp-phone-number-id:latest,WHATSAPP_BUSINESS_ACCOUNT_ID=whatsapp-business-account-id:latest,WHATSAPP_WEBHOOK_VERIFY_TOKEN=whatsapp-webhook-verify-token:latest"
-```
+### Consideraciones importantes para el despliegue
 
-### Configuración de acceso público (fundamental para webhooks)
+1. **Tiempo de inicio**: El contenedor necesita tiempo para inicializarse correctamente, especialmente al cargar embeddings desde GCS. La anotación `startup-probe-failure-threshold: "5"` ayuda a extender este tiempo.
 
-Para que WhatsApp pueda enviar eventos al webhook, el servicio debe ser accesible públicamente:
+2. **Puerto de escucha**: Cloud Run proporciona automáticamente una variable de entorno `PORT` que debe ser utilizada por la aplicación. No intentes establecer esta variable manualmente en `cloud-run.yaml`, ya que es reservada del sistema.
 
-```bash
-# Permitir invocaciones no autenticadas (necesario para webhooks)
-gcloud run services add-iam-policy-binding [SERVICE_NAME] \
-  --member="allUsers" \
-  --role="roles/run.invoker" \
-  --region=[REGION]
-```
+3. **Errores comunes**:
+   - Si el script no encuentra los embeddings, verifica que el bucket GCS esté correctamente configurado y que los archivos estén presentes.
+   - Si la carga desde GCS falla, asegúrate de que `scripts/__init__.py` esté incluido en el Dockerfile para permitir importaciones correctas.
 
-### Verificación del despliegue
+4. **Monitoreo de logs**:
+   ```bash
+   # Ver logs en tiempo real
+   gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=[SERVICE_NAME]" --limit=50
+   ```
 
-Después de desplegar, verifica que todo funcione correctamente:
-
-```bash
-# Obtener URL del servicio
-gcloud run services describe [SERVICE_NAME] --region=[REGION] --format="value(status.url)"
-
-# Verificar el estado del servicio
-curl -v $(gcloud run services describe [SERVICE_NAME] --region=[REGION] --format="value(status.url)")/health
-
-# Verificar el webhook de WhatsApp
-curl -v $(gcloud run services describe [SERVICE_NAME] --region=[REGION] --format="value(status.url)")/webhook/whatsapp
-
-# Probar el envío de mensajes
-curl $(gcloud run services describe [SERVICE_NAME] --region=[REGION] --format="value(status.url)")/test-webhook
-```
-
-### Solución de problemas comunes
-
-#### Problema 1: Error de arquitectura
-Si recibes el error "exec format error" o "no matching manifest for linux/amd64", significa que intentas ejecutar una imagen construida para una arquitectura distinta.
-```bash
-# Solución: Construir específicamente para amd64
-docker buildx build --platform linux/amd64 -t [IMAGE_NAME]:latest .
-docker tag [IMAGE_NAME]:latest gcr.io/[PROJECT_ID]/[IMAGE_NAME]:amd64-fix
-docker push gcr.io/[PROJECT_ID]/[IMAGE_NAME]:amd64-fix
-gcloud run deploy [SERVICE_NAME] --image gcr.io/[PROJECT_ID]/[IMAGE_NAME]:amd64-fix --platform managed --region=[REGION] --allow-unauthenticated
-```
-
-#### Problema 2: Error al cargar embeddings desde GCS
-Si recibes errores relacionados con la carga de embeddings desde GCS, verifica:
-
-1. **Comprobar existencia y estructura del bucket**:
-```bash
-gcloud storage ls gs://[BUCKET_NAME]/
-```
-
-2. **Verificar que las variables de entorno estén configuradas**:
-```bash
-gcloud run services describe [SERVICE_NAME] --region=[REGION]
-```
-
-3. **Solución común**: El error `FAISSVectorStore object has no attribute 'similarity_threshold'` ocurre cuando la carga desde GCS es exitosa pero no se inicializa el atributo. Asegúrate de que este se define al inicio del método `__init__` de la clase `FAISSVectorStore`.
-
-#### Problema 3: Error 403 Forbidden
-Si recibes un error 403 al intentar acceder al servicio, verifica los permisos de IAM:
-
-```bash
-# Verificar la política actual
-gcloud run services get-iam-policy [SERVICE_NAME] --region=[REGION]
-
-# Solución: Configurar acceso público explícitamente
-gcloud run services add-iam-policy-binding [SERVICE_NAME] \
-  --member="allUsers" \
-  --role="roles/run.invoker" \
-  --region=[REGION]
-```
-
-#### Problema 4: Error con Variable PORT
-Cloud Run asigna automáticamente una variable de entorno `PORT`. El código debe usar esta variable en lugar de definir un puerto fijo:
-
-```python
-# En scripts/deploy_backend.py
-port = int(os.getenv("PORT", "8080"))
-```
-
-### Configuración de webhook en Meta para WhatsApp Business
-
-1. Ve al [Facebook Developer Portal](https://developers.facebook.com/) y selecciona tu app
-2. Navega a "WhatsApp" > "API Setup" > "Configuration"
-3. En "Webhook", configura:
-   - **Callback URL**: `https://[TU-SERVICIO-URL]/webhook/whatsapp`
-   - **Verify Token**: El mismo valor que configuraste en el secreto `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
-4. Selecciona los eventos a suscribir: `messages`, `message_deliveries`, `message_reads`
-5. Haz clic en "Verify and Save"
-
-### Monitoreo y logs en Cloud Run
-
-```bash
-# Ver logs en tiempo real
-gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=[SERVICE_NAME]" --limit=50
-
-# Filtrar logs de errores
-gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=[SERVICE_NAME] AND severity>=ERROR" --limit=10
-
-# Ver logs específicos de una revisión
-gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=[SERVICE_NAME] AND resource.labels.revision_name=[REVISION-ID]" --limit=20
-```
-
-### Actualización del servicio
-
-Para actualizar el servicio después de cambios en el código o configuración:
-
-```bash
-# Reconstruir la imagen con nueva versión
-docker buildx build --platform linux/amd64 -t [IMAGE_NAME]:latest .
-docker tag [IMAGE_NAME]:latest gcr.io/[PROJECT_ID]/[IMAGE_NAME]:amd64-v2
-docker push gcr.io/[PROJECT_ID]/[IMAGE_NAME]:amd64-v2
-
-# Actualizar el servicio con la nueva imagen
-gcloud run services update [SERVICE_NAME] \
-  --image gcr.io/[PROJECT_ID]/[IMAGE_NAME]:amd64-v2 \
-  --region=[REGION]
-```
-
-### Actualización de variables de entorno
-
-Para actualizar variables de entorno sin reconstruir la imagen:
-
-```bash
-gcloud run services update [SERVICE_NAME] \
-  --region=[REGION] \
-  --set-env-vars="NUEVA_VARIABLE=valor,OTRA_VARIABLE=otro_valor"
-```
-
-## Endpoints Disponibles
-
-- `GET /health`: Estado del servicio
-- `POST /chat`: Endpoint para consultas directas
-- `POST /webhook/whatsapp`: Webhook para mensajes de WhatsApp
-- `GET /test-webhook`: Envía mensaje de prueba
-
-## Monitoreo y Mantenimiento
+### Monitoreo y Mantenimiento
 
 - Los logs se encuentran en la carpeta `logs/`
 - El healthcheck verifica el servicio cada 30 segundos
