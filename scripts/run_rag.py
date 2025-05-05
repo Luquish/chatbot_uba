@@ -14,8 +14,17 @@ from sklearn.metrics.pairwise import cosine_similarity
 import openai
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
 from calendar_service import CalendarService
+
+# Importar la integración con Google Cloud Storage
+try:
+    from gcs_storage import load_faiss_from_gcs
+    USE_GCS = True
+    logging.info("Módulo de Google Cloud Storage disponible")
+except ImportError:
+    USE_GCS = False
+    logging.warning("Módulo de Google Cloud Storage no disponible, usando sistema de archivos local")
+
 # Crear directorio de logs si no existe
 Path("logs").mkdir(exist_ok=True)
 
@@ -335,12 +344,40 @@ class FAISSVectorStore(VectorStore):
             index_path (str): Ruta al archivo de índice FAISS
             metadata_path (str): Ruta al archivo de metadatos
         """
+        # Intentar cargar desde GCS primero si está disponible
+        try:
+            if USE_GCS and os.getenv('GCS_BUCKET_NAME'):
+                bucket_name = os.getenv('GCS_BUCKET_NAME')
+                
+                # Si solo se proporcionan nombres de archivo (sin ruta), usar los nombres directamente en GCS
+                if index_path == os.path.basename(index_path):
+                    gcs_index_path = index_path
+                else:
+                    # Extraer solo el nombre del archivo si se proporciona una ruta completa
+                    gcs_index_path = os.path.basename(index_path)
+                
+                if metadata_path == os.path.basename(metadata_path):
+                    gcs_metadata_path = metadata_path
+                else:
+                    # Extraer solo el nombre del archivo si se proporciona una ruta completa
+                    gcs_metadata_path = os.path.basename(metadata_path)
+                
+                logger.info(f"Intentando cargar embeddings desde GCS bucket {bucket_name}, archivos: {gcs_index_path}, {gcs_metadata_path}")
+                self.index, self.metadata = load_faiss_from_gcs(bucket_name, gcs_index_path, gcs_metadata_path)
+                logger.info(f"Índice FAISS cargado desde GCS con {self.index.ntotal} vectores")
+                return
+            else:
+                logger.info("GCS no está disponible o no se proporcionó GCS_BUCKET_NAME, intentando sistema de archivos local")
+        except Exception as e:
+            logger.warning(f"Error al cargar embeddings desde GCS: {str(e)}, intentando sistema de archivos local")
+        
+        # Fallback a sistema de archivos local
         if not os.path.exists(index_path):
             raise FileNotFoundError(f"No se encontró el índice FAISS en {index_path}")
             
         self.index = faiss.read_index(index_path)
         self.metadata = pd.read_csv(metadata_path)
-        logger.info(f"Índice FAISS cargado con {self.index.ntotal} vectores")
+        logger.info(f"Índice FAISS cargado desde sistema de archivos local con {self.index.ntotal} vectores")
     
         # Umbral de similitud mínimo (ajustable según necesidad)
         self.similarity_threshold = 0.1  # Reducido de 0.6 a 0.1 para ser más permisivo
@@ -712,10 +749,18 @@ class RAGSystem:
         Returns:
             VectorStore: Implementación del almacén vectorial FAISS
         """
-        index_path = str(self.embeddings_dir / 'faiss_index.bin')
-        metadata_path = str(self.embeddings_dir / 'metadata.csv')
-        logger.info(f"Inicializando índice FAISS desde {index_path}")
-        return FAISSVectorStore(index_path, metadata_path)
+        # Verificamos si estamos usando GCS o sistema de archivos local
+        if USE_GCS and os.getenv('GCS_BUCKET_NAME'):
+            logger.info(f"Inicializando índice FAISS desde GCS bucket: {os.getenv('GCS_BUCKET_NAME')}")
+            # Solo pasamos los nombres de archivo base, la función load_faiss_from_gcs se encargará de
+            # localizarlos en el bucket de GCS
+            return FAISSVectorStore('faiss_index.bin', 'metadata.csv')
+        else:
+            # Usamos el sistema de archivos normal
+            index_path = str(self.embeddings_dir / 'faiss_index.bin')
+            metadata_path = str(self.embeddings_dir / 'metadata.csv')
+            logger.info(f"Inicializando índice FAISS desde sistema de archivos local: {index_path}")
+            return FAISSVectorStore(index_path, metadata_path)
         
     def _expand_query(self, query: str) -> str:
         """

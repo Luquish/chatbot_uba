@@ -1,0 +1,64 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: uba-chatbot
+  annotations:
+    run.googleapis.com/mount-volumes-gcs-csi: enabled
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/cpu-throttling: "true"
+    spec:
+      serviceAccountName: chatbot-serviceaccount@[PROJECT_ID].iam.gserviceaccount.com
+      containers:
+      - image: gcr.io/[PROJECT_ID]/uba-chatbot:latest
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "8000"
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-credentials
+              key: api-key
+        - name: WHATSAPP_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: whatsapp-credentials
+              key: api-token
+        - name: WHATSAPP_PHONE_NUMBER_ID
+          valueFrom:
+            secretKeyRef:
+              name: whatsapp-credentials
+              key: phone-number-id
+        - name: WHATSAPP_BUSINESS_ACCOUNT_ID
+          valueFrom:
+            secretKeyRef:
+              name: whatsapp-credentials
+              key: business-account-id
+        - name: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: whatsapp-credentials
+              key: webhook-verify-token
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        volumeMounts:
+        - name: embeddings
+          mountPath: /app/data/embeddings
+          readOnly: true
+      volumes:
+      - name: embeddings
+        csi:
+          driver: gcs.csi.storage.gke.io
+          volumeAttributes:
+            bucket: uba-chatbot-embeddings 

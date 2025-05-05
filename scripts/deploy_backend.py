@@ -255,8 +255,18 @@ async def startup_event():
     global rag_system, rag_initialized
     try:
         logger.info("Iniciando sistema RAG...")
+        
+        # Detectar si estamos en Docker o local
+        # Si /app existe como directorio, estamos en Docker
+        if os.path.exists('/app'):
+            embeddings_dir = '/app/data/embeddings'
+        else:
+            # Estamos ejecutando localmente
+            embeddings_dir = 'data/embeddings'
+            
+        logger.info(f"Utilizando directorio de embeddings: {embeddings_dir}")
         rag_system = RAGSystem(
-            embeddings_dir='data/embeddings'
+            embeddings_dir=embeddings_dir
         )
         rag_initialized = True
         logger.info("Sistema RAG inicializado correctamente")
@@ -752,16 +762,20 @@ def main():
     try:
         # Obtener configuración del servidor
         host = os.getenv('HOST', '0.0.0.0')
+        
+        # En Cloud Run, la variable PORT es establecida por la plataforma
+        # https://cloud.google.com/run/docs/container-contract#port
         port = int(os.getenv('PORT', 8080))
         
         logger.info(f"Iniciando servidor en {host}:{port}")
         logger.info(f"Entorno: {ENVIRONMENT}")
         logger.info(f"Ruta del modelo: {os.getenv('MODEL_PATH', 'data/embeddings')}")
         logger.info(f"Ruta de embeddings: {os.getenv('EMBEDDINGS_DIR', 'data/embeddings')}")
+        logger.info(f"GCS Bucket: {os.getenv('GCS_BUCKET_NAME', 'No configurado')}")
         logger.info(f"Número de prueba configurado: {MY_PHONE_NUMBER}")
         
         # Iniciar servidor
-        uvicorn.run("deploy_backend:app", host=host, port=port, reload=True)
+        uvicorn.run("deploy_backend:app", host=host, port=port, reload=(ENVIRONMENT == 'development'))
     except Exception as e:
         logger.error(f"Error al iniciar servidor: {str(e)}")
         raise e
