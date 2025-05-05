@@ -344,6 +344,9 @@ class FAISSVectorStore(VectorStore):
             index_path (str): Ruta al archivo de índice FAISS
             metadata_path (str): Ruta al archivo de metadatos
         """
+        # Umbral de similitud mínimo (ajustable según necesidad)
+        self.similarity_threshold = 0.1  # Reducido de 0.6 a 0.1 para ser más permisivo
+        
         # Intentar cargar desde GCS primero si está disponible
         try:
             if USE_GCS and os.getenv('GCS_BUCKET_NAME'):
@@ -378,9 +381,6 @@ class FAISSVectorStore(VectorStore):
         self.index = faiss.read_index(index_path)
         self.metadata = pd.read_csv(metadata_path)
         logger.info(f"Índice FAISS cargado desde sistema de archivos local con {self.index.ntotal} vectores")
-    
-        # Umbral de similitud mínimo (ajustable según necesidad)
-        self.similarity_threshold = 0.1  # Reducido de 0.6 a 0.1 para ser más permisivo
     
     def search(self, query_embedding: List[float], k: int = 5) -> List[Dict]:
         """

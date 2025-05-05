@@ -3,7 +3,7 @@ import logging
 import json
 import requests
 from typing import Dict, Any
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from run_rag import RAGSystem
@@ -249,6 +249,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Middleware para manejo directo de WebHooks de WhatsApp en producción
+if ENVIRONMENT == "production":
+    @app.middleware("http")
+    async def whatsapp_webhook_middleware(request: Request, call_next):
+        """
+        Middleware para manejar la verificación de webhooks de WhatsApp en producción.
+        Solo se activa en entorno de producción para permitir la comunicación directa
+        entre WhatsApp Business API y Cloud Run, sin necesidad de Glitch como intermediario.
+        """
+        # Solo interceptar peticiones GET al endpoint del webhook (verificación)
+        if request.url.path == "/webhook/whatsapp" and request.method == "GET":
+            logger.info("Interceptando solicitud de verificación de webhook directa")
+            # Obtener parámetros de verificación
+            params = request.query_params
+            mode = params.get("hub.mode")
+            token = params.get("hub.verify_token")
+            challenge = params.get("hub.challenge")
+            
+            # Obtener token de verificación configurado
+            verify_token = WHATSAPP_WEBHOOK_VERIFY_TOKEN
+            
+            # Verificar modo y token
+            if mode == "subscribe" and token == verify_token:
+                logger.info(f"Webhook verificado con éxito en middleware: {challenge}")
+                # Responder con el challenge directamente
+                return Response(content=challenge, media_type="text/plain")
+            else:
+                logger.warning(f"Verificación fallida del webhook. Token esperado: {verify_token}, recibido: {token}")
+                return Response(status_code=403, content="Forbidden")
+                
+        # Para todas las demás solicitudes, continuar con el flujo normal
+        return await call_next(request)
+        
+    logger.info("Middleware para manejo directo de webhooks de WhatsApp activado (modo producción)")
+else:
+    logger.info("Ejecutando en modo desarrollo - Webhooks redirigidos desde Glitch")
+
 @app.on_event("startup")
 async def startup_event():
     """Inicializa el sistema RAG al iniciar el servidor."""
@@ -278,6 +315,8 @@ async def startup_event():
 async def whatsapp_webhook(request: Request):
     """
     Webhook para recibir mensajes de WhatsApp.
+    En producción: Recibe directamente mensajes de la API de WhatsApp Business.
+    En desarrollo: Recibe mensajes redireccionados desde Glitch.
     
     Args:
         request (Request): Request de FastAPI
@@ -293,26 +332,26 @@ async def whatsapp_webhook(request: Request):
         # Obtener el cuerpo de la solicitud
         body = await request.body()
         
-        # Validar la firma del webhook en producción
-        if ENVIRONMENT == "production":
-            signature = request.headers.get("x-hub-signature-256", "")
-            if not signature:
-                logger.error("Firma no encontrada en headers")
-                raise HTTPException(status_code=403, detail="Firma no encontrada")
+        # COMENTADO TEMPORALMENTE: Validar la firma del webhook en producción
+        # if ENVIRONMENT == "production":
+        #     signature = request.headers.get("x-hub-signature-256", "")
+        #     if not signature:
+        #         logger.error("Firma no encontrada en headers")
+        #         raise HTTPException(status_code=403, detail="Firma no encontrada")
                 
-            # Calcular y verificar firma
-            import hmac
-            import hashlib
+        #     # Calcular y verificar firma
+        #     import hmac
+        #     import hashlib
             
-            expected_signature = hmac.new(
-                WHATSAPP_WEBHOOK_VERIFY_TOKEN.encode(),
-                body,
-                hashlib.sha256
-            ).hexdigest()
+        #     expected_signature = hmac.new(
+        #         WHATSAPP_WEBHOOK_VERIFY_TOKEN.encode(),
+        #         body,
+        #         hashlib.sha256
+        #     ).hexdigest()
             
-            if not hmac.compare_digest(f"sha256={expected_signature}", signature):
-                logger.error("Firma inválida")
-                raise HTTPException(status_code=403, detail="Firma inválida")
+        #     if not hmac.compare_digest(f"sha256={expected_signature}", signature):
+        #         logger.error("Firma inválida")
+        #         raise HTTPException(status_code=403, detail="Firma inválida")
         
         # Parsear el cuerpo JSON
         try:
@@ -337,7 +376,7 @@ async def whatsapp_webhook(request: Request):
             changes = entry["changes"][0]
             value = changes["value"]
             
-            # Si tenemos un mensaje o cualquier evento, reenviamos al backend
+            # Si tenemos un mensaje o cualquier evento, procesamos
             if "messages" in value:
                 message = value.get("messages", [])[0]
                 message_body = message.get("text", {}).get("body", "")
@@ -353,6 +392,44 @@ async def whatsapp_webhook(request: Request):
                 business_phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
                 
                 logger.info(f"Webhook completo - De: {from_number}, Nombre: {profile_name}, Mensaje: '{message_body}'")
+                
+                # Procesar el mensaje usando RAG
+                if not rag_initialized:
+                    logger.error("Sistema RAG no inicializado")
+                    return {
+                        "status": "error", 
+                        "message": "Sistema RAG no inicializado"
+                    }
+                
+                try:
+                    # Normalizar el número del remitente para WhatsApp
+                    whatsapp_handler = get_whatsapp_handler()
+                    normalized_from = whatsapp_handler.normalize_phone_number(from_number)
+                    
+                    # Procesar con RAG
+                    result = rag_system.process_query(
+                        message_body, 
+                        user_id=normalized_from,
+                        user_name=profile_name
+                    )
+                    response_text = result["response"]
+                    
+                    # Enviar respuesta a WhatsApp
+                    send_result = await whatsapp_handler.send_message(
+                        normalized_from,
+                        response_text
+                    )
+                    
+                    return {
+                        "status": "success",
+                        "from": normalized_from,
+                        "message": message_body,
+                        "response": response_text
+                    }
+                except Exception as e:
+                    logger.error(f"Error al procesar mensaje: {str(e)}")
+                    return {"status": "error", "message": str(e)}
+                
             elif "statuses" in value:
                 status = value.get("statuses", [])[0]
                 status_type = status.get("status")
@@ -596,127 +673,16 @@ async def chat_endpoint(message: Dict[str, str]):
 async def receive_whatsapp_message(request: Request):
     """
     Endpoint para recibir mensajes de WhatsApp redireccionados desde Glitch.
-    
-    Este endpoint es llamado por el webhook de Glitch cuando recibe un mensaje.
+    Se mantiene para compatibilidad en entorno de desarrollo.
     """
     # Agregar log de entrada para confirmar que se está llamando al endpoint
     logger.info("======= MENSAJE RECIBIDO EN /api/whatsapp/message =======")
     
-    try:
-        # Log de headers y query params para depuración
-        logger.debug(f"Headers: {dict(request.headers)}")
-        
-        # Obtener datos del mensaje como texto para depuración
-        body_bytes = await request.body()
-        body_text = body_bytes.decode('utf-8')
-        logger.debug(f"Cuerpo RAW: {body_text}")
-        
-        # Obtener datos del mensaje
-        try:
-            data = await request.json()
-            logger.debug(f"Datos JSON recibidos: {json.dumps(data, indent=2)}")
-        except Exception as e:
-            logger.error(f"Error al leer el cuerpo de la solicitud: {str(e)}")
-            return {"status": "error", "message": f"Error en JSON: {str(e)}", "body": body_text}
-        
-        # Intentar procesar el mensaje según el formato de webhook completo o el formato simplificado
-        message_body = ""
-        from_number = ""
-        
-        # Verificar si estamos recibiendo el webhook completo o solo el mensaje simplificado
-        if "object" in data and data.get("object") == "whatsapp_business_account":
-            # Formato webhook completo
-            logger.debug("Detectado formato de webhook completo")
-            try:
-                entry = data.get("entry", [])[0]
-                changes = entry.get("changes", [])[0]
-                value = changes.get("value", {})
-                
-                # Verificar si hay mensajes
-                if "messages" in value:
-                    message = value.get("messages", [])[0]
-                    message_body = message.get("text", {}).get("body", "")
-                    from_number = message.get("from", "")
-                    
-                    # Obtener el nombre del perfil si está disponible
-                    contacts = value.get("contacts", [])
-                    profile_name = contacts[0].get("profile", {}).get("name", "") if contacts else ""
-                    logger.info(f"Nombre del perfil: {profile_name}")
-                    
-                    # Extraer ID del número de teléfono de negocio desde metadata
-                    business_phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
-                    
-                    logger.info(f"Webhook completo - De: {from_number}, Nombre: {profile_name}, Mensaje: '{message_body}'")
-                else:
-                    # Puede ser un mensaje de estado (read, delivered, etc)
-                    logger.debug("Evento de estado recibido, no es un mensaje de texto")
-                    return {"status": "ignored", "message": "Evento de estado, no es un mensaje"}
-            except (IndexError, KeyError) as e:
-                logger.error(f"Error al extraer datos del webhook completo: {str(e)}")
-                return {"status": "error", "message": f"Error en estructura de webhook: {str(e)}"}
-        else:
-            # Formato simplificado que envía server.js actualmente
-            message = data.get("message", {})
-            
-            if "text" in message:
-                message_body = message.get("text", {}).get("body", "")
-                from_number = message.get("from", "")
-            
-            business_phone_number_id = data.get("business_phone_number_id", "")
-            logger.info(f"Formato simplificado - De: {from_number}, Mensaje: '{message_body}'")
-        
-        # Log de los datos extraídos
-        logger.info(f"Mensaje extraído - De: {from_number}, Cuerpo: '{message_body}'")
-        
-        if not message_body or not from_number:
-            logger.error("Error: Mensaje sin cuerpo o remitente")
-            return {"status": "error", "message": "Datos incompletos", "received_data": data}
-        
-        # Normalizar el número del remitente
-        whatsapp_handler = get_whatsapp_handler()
-        from_number = whatsapp_handler.normalize_phone_number(from_number)
-        logger.info(f"Número normalizado: {from_number}")
-        
-        # Procesar el mensaje usando RAG
-        try:
-            logger.info(f"Procesando mensaje con RAG: '{message_body}'")
-            result = rag_system.process_query(
-                message_body, 
-                user_id=from_number,
-                user_name=profile_name if profile_name else None
-            )
-            response_text = result["response"]
-            logger.info(f"Respuesta RAG generada: {response_text}")
-        except Exception as e:
-            logger.error(f"Error al procesar con RAG: {str(e)}")
-            response_text = "Lo siento, tuve un problema procesando tu mensaje. Por favor, intenta de nuevo más tarde."
-        
-        # Enviar respuesta por WhatsApp
-        try:
-            send_result = await whatsapp_handler.send_message(
-                from_number,
-                response_text
-            )
-            logger.debug(f"Resultado del envío: {json.dumps(send_result, indent=2)}")
-            
-            return {
-                "status": "success",
-                "message": "Respuesta enviada correctamente",
-                "response_text": response_text,
-                "details": send_result
-            }
-        except Exception as e:
-            logger.error(f"Error al enviar: {str(e)}")
-            return {"status": "error", "message": f"Error al enviar: {str(e)}"}
-        
-    except Exception as e:
-        logger.error(f"Error general: {str(e)}")
-        import traceback
-        return {
-            "status": "error", 
-            "message": str(e),
-            "traceback": traceback.format_exc()
-        }
+    if ENVIRONMENT == "production":
+        logger.warning("Endpoint /api/whatsapp/message llamado en producción. Considere actualizar la configuración para usar /webhook/whatsapp directamente.")
+    
+    # En vez de duplicar lógica, redirigimos internamente al endpoint principal
+    return await whatsapp_webhook(request)
 
 @app.get("/test-webhook")
 async def test_webhook():
