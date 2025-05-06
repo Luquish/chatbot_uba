@@ -735,7 +735,6 @@ def main():
         
         logger.info(f"Iniciando servidor en {host}:{port}")
         logger.info(f"Entorno: {ENVIRONMENT}")
-        logger.info(f"Ruta del modelo: {os.getenv('MODEL_PATH', 'data/embeddings')}")
         logger.info(f"Ruta de embeddings: {os.getenv('EMBEDDINGS_DIR', 'data/embeddings')}")
         logger.info(f"GCS Bucket: {os.getenv('GCS_BUCKET_NAME', 'No configurado')}")
         logger.info(f"Número de prueba configurado: {MY_PHONE_NUMBER}")

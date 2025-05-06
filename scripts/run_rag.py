@@ -344,8 +344,8 @@ class FAISSVectorStore(VectorStore):
             index_path (str): Ruta al archivo de índice FAISS
             metadata_path (str): Ruta al archivo de metadatos
         """
-        # Umbral de similitud mínimo (ajustable según necesidad)
-        self.similarity_threshold = 0.1  # Reducido de 0.6 a 0.1 para ser más permisivo
+        
+        self.similarity_threshold = 0.1
         
         # Intentar cargar desde GCS primero si está disponible
         try:
@@ -802,9 +802,7 @@ class RAGSystem:
         Returns:
             List[Dict]: Lista de chunks relevantes con metadatos
         """
-        if k is None:
-            k = int(os.getenv('RAG_NUM_CHUNKS', 5))
-            
+    
         # Preprocesar la consulta
         query = query.strip()
         if not query:
@@ -1350,7 +1348,7 @@ INSTRUCCIONES:
                 }
             
             # Obtener chunks relevantes
-            num_chunks = int(os.getenv('RAG_NUM_CHUNKS', 3))
+            num_chunks = int(os.getenv('RAG_NUM_CHUNKS', 5))
             relevant_chunks = self.retrieve_relevant_chunks(query_original, k=num_chunks)
             
             # Si no hay resultados relevantes, intentar con la consulta normalizada

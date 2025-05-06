@@ -68,53 +68,53 @@ cp .env.example .env
 ### Variables de Entorno Principales
 
 ```
-# General
-ENVIRONMENT=development                   # development o production
+# Configuración de Usuario para Pruebas
+MY_PHONE_NUMBER=                                 # (opcional) Tu número para pruebas
 
-# WhatsApp Business API
-WHATSAPP_API_TOKEN=your_token             # Token de la API de WhatsApp
-WHATSAPP_PHONE_NUMBER_ID=your_phone_id    # ID del número de teléfono en WhatsApp Business
-WHATSAPP_BUSINESS_ACCOUNT_ID=your_account_id  # ID de la cuenta de negocio
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_token  # Token para verificar webhooks
+# Configuración de Google Calendar API
+CALENDAR_ID_EXAMENES=                            # ID del calendario de exámenes
+CALENDAR_ID_INSCRIPCIONES=                       # ID del calendario de inscripciones
+CALENDAR_ID_CURSADA=                             # ID del calendario de cursada
+CALENDAR_ID_TRAMITES=                            # ID del calendario de trámites
+GOOGLE_CALENDAR_API_KEY=                         # API Key de Google Calendar
 
-# Configuración de Glitch (para webhook en desarrollo)
-GLITCH_PROJECT_NAME=your_project_name     # Nombre del proyecto en Glitch
-GLITCH_API_URL=https://api.glitch.com     # URL de la API de Glitch
+# Configuración de WhatsApp Business API
+WHATSAPP_API_TOKEN=                              # Token de la API de WhatsApp
+WHATSAPP_PHONE_NUMBER_ID=                        # ID del número de teléfono en WhatsApp Business
+WHATSAPP_BUSINESS_ACCOUNT_ID=                    # ID de la cuenta de negocio
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=                   # Token para verificar webhooks
 
-# Backend y servidor
+# URL del backend para recibir mensajes de Glitch
 BACKEND_URL=http://localhost:8000/api/whatsapp/message  # URL para webhooks
-HOST=0.0.0.0                              # Host para el servidor FastAPI
-PORT=8000                                 # Puerto para el servidor FastAPI
 
-# Configuración de OpenAI
-OPENAI_API_KEY=your_openai_key            # API Key de OpenAI
-PRIMARY_MODEL=gpt-4o-mini                 # Modelo principal de OpenAI
-FALLBACK_MODEL=gpt-4.1-nano               # Modelo de respaldo si falla el principal
-EMBEDDING_MODEL=text-embedding-3-small    # Modelo para embeddings
-
-
-# Parámetros de generación
-MAX_LENGTH=512                            # Longitud máxima de contexto
-TEMPERATURE=0.7                           # Temperatura para generación
-TOP_P=0.9                                 # Parámetro top_p para generación
-TOP_K=50                                  # Parámetro top_k para generación
-MAX_OUTPUT_TOKENS=300                     # Máxima longitud de salida
-
-# Configuración de RAG
-RAG_NUM_CHUNKS=3                          # Número de chunks a recuperar
-SIMILARITY_THRESHOLD=0.3                  # Umbral de similitud mínima
+# Configuración del servidor
+HOST=0.0.0.0                                     # Host para el servidor FastAPI
+PORT=8000                                        # Puerto para el servidor FastAPI
 
 # Directorios de datos
-MODEL_PATH=models/finetuned_model         # Directorio para modelos
-EMBEDDINGS_DIR=data/embeddings            # Directorio para embeddings
+EMBEDDINGS_DIR=data/embeddings                   # Directorio para embeddings
 
-# Dispositivo para cálculos
-DEVICE=mps                                # auto, cuda, cpu, o mps para Mac
-```
+# Configuración de modelos de OpenAI
+OPENAI_API_KEY=                                  # API Key de OpenAI
+PRIMARY_MODEL=gpt-4o-mini                        # Modelo principal de OpenAI
+FALLBACK_MODEL=gpt-4.1-nano                      # Modelo de respaldo si falla el principal
+EMBEDDING_MODEL=text-embedding-3-small           # Modelo para embeddings
 
-5. Ejecuta el script de configuración automática:
-```bash
-python scripts/auto_setup.py
+# Parámetros de generación
+TEMPERATURE=0.7                                  # Temperatura para generación
+TOP_P=0.9                                        # Parámetro top_p para generación
+TOP_K=50                                         # Parámetro top_k para generación
+MAX_OUTPUT_TOKENS=300                            # Máxima longitud de salida
+
+# Configuración de RAG
+RAG_NUM_CHUNKS=3                                 # Número de chunks a recuperar
+SIMILARITY_THRESHOLD=0.3                         # Umbral de similitud mínima
+
+# Configuración del dispositivo (auto, cuda, cpu, mps)
+DEVICE=mps                                       # auto, cuda, cpu, o mps para Mac
+
+# Configuración del entorno
+API_TIMEOUT=30                                   # Timeout para llamadas a APIs externas (segundos)
 ```
 
 ## Flujo de Trabajo
@@ -154,7 +154,7 @@ El proyecto está configurado para ser desplegado usando Docker, separando el pr
 .
 ├── Dockerfile           # Configuración de la imagen
 ├── docker-compose.yml   # Configuración del servicio
-└── .dockerignore       # Archivos excluidos del contenedor
+└── .dockerignore        # Archivos excluidos del contenedor
 ```
 
 #### Archivos en Producción
@@ -211,29 +211,6 @@ docker run -p 8000:8000 \
 - Montar embeddings: `-v $(pwd)/data/embeddings:/app/data/embeddings`
 - Especificar el puerto: `-e PORT=8000`
 - Usar IDs correctos para WhatsApp (el PHONE_NUMBER_ID es un ID numérico asignado por Meta, no el número de teléfono real)
-
-#### Variables de Entorno para Producción
-
-Crear un archivo `.env` con:
-```env
-# Configuración del entorno
-ENVIRONMENT=production
-HOST=0.0.0.0
-PORT=8000
-
-# WhatsApp Business API
-WHATSAPP_API_TOKEN=your_token_here
-WHATSAPP_PHONE_NUMBER_ID=your_phone_id_here
-WHATSAPP_BUSINESS_ACCOUNT_ID=your_business_account_id_here
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_webhook_token_here
-
-# OpenAI
-OPENAI_API_KEY=your_openai_key_here
-
-# Configuración del modelo
-PRIMARY_MODEL=gpt-4o-mini
-EMBEDDING_MODEL=text-embedding-3-small
-```
 
 ### Flujo de Actualización de Documentos
 
