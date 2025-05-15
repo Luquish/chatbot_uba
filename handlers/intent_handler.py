@@ -3,15 +3,30 @@ Manejador de intenciones para clasificar las consultas de los usuarios.
 """
 import logging
 import re
-import numpy as np
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Optional
 from unidecode import unidecode
-from sklearn.metrics.pairwise import cosine_similarity
 
 from config.constants import INTENT_EXAMPLES
-from models.openai_model import OpenAIEmbedding
+from models.openai_model import OpenAIEmbedding, OpenAIModel
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_text(text: str) -> str:
+    """
+    Normaliza un texto para comparación.
+    
+    Args:
+        text (str): Texto a normalizar
+        
+    Returns:
+        str: Texto normalizado
+    """
+    normalized = text.lower().strip()
+    normalized = unidecode(normalized)  # Eliminar tildes
+    normalized = re.sub(r'[^\w\s]', '', normalized)  # Eliminar signos de puntuación
+    normalized = re.sub(r'\s+', ' ', normalized).strip()  # Normalizar espacios
+    return normalized
 
 
 def normalize_intent_examples(intent_examples: Dict) -> Dict:
@@ -32,11 +47,7 @@ def normalize_intent_examples(intent_examples: Dict) -> Dict:
         
         for example in examples:
             # Aplicar la misma normalización que a las consultas
-            norm_example = example.lower().strip()
-            norm_example = unidecode(norm_example)  # Eliminar tildes
-            norm_example = re.sub(r'[^\w\s]', '', norm_example)  # Eliminar signos de puntuación
-            norm_example = re.sub(r'\s+', ' ', norm_example).strip()  # Normalizar espacios
-            norm_examples.append(norm_example)
+            norm_examples.append(normalize_text(example))
             
         normalized_examples[intent] = {
             'examples': norm_examples,
@@ -46,13 +57,70 @@ def normalize_intent_examples(intent_examples: Dict) -> Dict:
     return normalized_examples
 
 
-def get_query_intent(query: str, embedding_model: OpenAIEmbedding, normalized_intent_examples: Dict = None) -> Tuple[str, float]:
+def get_intent_by_keywords(query: str, normalized_intent_examples: Dict) -> Optional[Tuple[str, float]]:
     """
-    Determina la intención de la consulta usando similitud semántica.
+    Detecta la intención basada en palabras clave para casos comunes.
+    Más eficiente que usar embeddings para consultas simples.
+    
+    Args:
+        query (str): Consulta normalizada
+        normalized_intent_examples (Dict): Ejemplos normalizados
+        
+    Returns:
+        Optional[Tuple[str, float]]: (intent, confianza) si se detecta, None si no
+    """
+    # Mapeo de palabras clave a intenciones con alta confianza
+    keyword_patterns = {
+        # Saludos
+        'saludo': ['hola', 'buenas', 'buenos dias', 'buen dia', 'que tal', 'saludos'],
+        
+        # Identidad
+        'identidad': ['quien sos', 'quien eres', 'como te llamas', 'cual es tu nombre', 'que sos vos', 
+                      'tu nombre', 'sos un bot', 'eres un bot', 'sos una persona', 'como se llama'],
+        
+        # Pregunta sobre capacidades
+        'pregunta_capacidades': ['que podes hacer', 'que sabes hacer', 'que te puedo preguntar', 
+                                'que puedo preguntarte', 'en que me ayudas', 'para que servis'],
+        
+        # Cortesía
+        'cortesia': ['como estas', 'como va', 'como te va', 'todo bien', 'como andas'],
+        
+        # Agradecimientos
+        'agradecimiento': ['gracias', 'muchas gracias', 'te agradezco', 'genial', 'perfecto', 'ok', 'okey', 'listo']
+    }
+    
+    # Normalizar la consulta
+    query_norm = normalize_text(query)
+    
+    # Primero buscar coincidencias exactas en ejemplos normalizados
+    for intent, data in normalized_intent_examples.items():
+        if query_norm in data['examples']:
+            return intent, 0.95
+    
+    # Luego buscar palabras clave para intenciones comunes
+    for intent, keywords in keyword_patterns.items():
+        for keyword in keywords:
+            # Coincidencia completa con palabra clave (alta confianza)
+            if keyword == query_norm:
+                return intent, 0.9
+            
+            # La consulta contiene la palabra clave (menor confianza)
+            if keyword in query_norm and len(query_norm.split()) <= 5:
+                return intent, 0.75
+    
+    # No se encontró coincidencia por palabras clave
+    return None
+
+
+def get_query_intent(query: str, embedding_model: Optional[OpenAIEmbedding] = None, 
+                    normalized_intent_examples: Dict = None) -> Tuple[str, float]:
+    """
+    Determina la intención de la consulta usando palabras clave primero y, si es necesario, 
+    similitud semántica con embeddings.
     
     Args:
         query (str): Consulta del usuario
-        embedding_model (OpenAIEmbedding): Modelo de embeddings
+        embedding_model (OpenAIEmbedding): Modelo de embeddings (opcional)
         normalized_intent_examples (Dict): Ejemplos normalizados (opcional)
         
     Returns:
@@ -62,36 +130,111 @@ def get_query_intent(query: str, embedding_model: OpenAIEmbedding, normalized_in
     if normalized_intent_examples is None:
         normalized_intent_examples = normalize_intent_examples(INTENT_EXAMPLES)
     
-    # Normalización del texto
+    # Guardar consulta original para logging
     query_original = query
-    query = query.lower().strip()
-    query = unidecode(query)  # Eliminar tildes
-    query = re.sub(r'[^\w\s]', '', query)  # Eliminar signos de puntuación
-    query = re.sub(r'\s+', ' ', query).strip()  # Normalizar espacios
     
-    if query_original != query:
-        logger.info(f"Consulta normalizada: '{query_original}' → '{query}'")
+    # Normalización del texto
+    query_norm = normalize_text(query)
+    
+    if query_original != query_norm:
+        logger.info(f"Consulta normalizada: '{query_original}' → '{query_norm}'")
+    
+    # Primero intentar detección basada en palabras clave (más eficiente)
+    keyword_result = get_intent_by_keywords(query_norm, normalized_intent_examples)
+    if keyword_result:
+        intent, confidence = keyword_result
+        logger.info(f"Intención detectada por palabras clave: '{intent}' (confianza: {confidence:.2f})")
+        return intent, confidence
+    
+    # Si no hay modelo de embeddings o se omite intencionalmente, devolver valor por defecto
+    if embedding_model is None:
+        logger.info("No se proporcionó modelo de embeddings, retornando intención desconocida")
+        return 'desconocido', 0.0
+    
+    # Si no se pudo determinar por palabras clave y se cuenta con modelo, 
+    # usar embedding para consultas más complejas
+    logger.info("Usando modelo de embeddings para detectar intención")
+    
+    try:
+        # Analizar solo una muestra de ejemplos por intención para reducir carga
+        sample_examples = []
+        sample_intents = []
         
-    query_embedding = embedding_model.encode([query])[0]
-    
-    max_similarity = -1
-    best_intent = 'desconocido'
-    
-    # Usar ejemplos normalizados
-    for intent, data in normalized_intent_examples.items():
-        examples = data['examples']
-        example_embeddings = embedding_model.encode(examples)
-        similarities = cosine_similarity([query_embedding], example_embeddings)[0]
-        avg_similarity = np.mean(similarities)
+        for intent, data in normalized_intent_examples.items():
+            # Tomar solo hasta 3 ejemplos por intención para reducir llamadas a la API
+            examples_to_use = data['examples'][:3]
+            sample_examples.extend(examples_to_use)
+            sample_intents.extend([intent] * len(examples_to_use))
         
-        # Para debugging
-        logger.debug(f"Intención: {intent}, similitud: {avg_similarity:.2f}")
+        # Solo una llamada a la API para todos los ejemplos
+        query_embedding = embedding_model.encode([query_norm])[0]
+        all_embeddings = embedding_model.encode(sample_examples)
         
-        if avg_similarity > max_similarity:
-            max_similarity = avg_similarity
-            best_intent = intent
+        # Encontrar el ejemplo más similar
+        max_similarity = -1
+        best_intent = 'desconocido'
+        
+        from sklearn.metrics.pairwise import cosine_similarity
+        similarities = cosine_similarity([query_embedding], all_embeddings)[0]
+        
+        best_idx = similarities.argmax()
+        max_similarity = similarities[best_idx]
+        best_intent = sample_intents[best_idx]
+        
+        logger.info(f"Intención detectada por embeddings: '{best_intent}' (similitud: {max_similarity:.2f})")
+        
+        return best_intent, float(max_similarity)
+        
+    except Exception as e:
+        logger.error(f"Error al usar embeddings: {str(e)}")
+        return 'desconocido', 0.0
+
+
+def interpret_ambiguous_query(model: OpenAIModel, query: str) -> Tuple[str, float]:
+    """
+    Usa el modelo de lenguaje para interpretar una consulta ambigua y determinar la intención.
     
-    return best_intent, max_similarity
+    Args:
+        model (OpenAIModel): Modelo de lenguaje
+        query (str): Consulta del usuario
+        
+    Returns:
+        Tuple[str, float]: Intención interpretada y nivel de confianza
+    """
+    prompt = f"""
+Eres un asistente especializado en detectar la intención de consultas de usuarios para un chatbot universitario.
+Debes determinar qué intención corresponde mejor a la siguiente consulta del usuario:
+
+Consulta: "{query}"
+
+Estas son las posibles intenciones:
+- saludo: El usuario está saludando o iniciando la conversación
+- identidad: El usuario pregunta por el nombre o identidad del bot
+- pregunta_capacidades: El usuario pregunta qué puede hacer el bot
+- cortesia: El usuario pregunta cómo está el bot, es una interacción social
+- agradecimiento: El usuario está agradeciendo o mostrando conformidad
+- consulta_administrativa: El usuario pregunta sobre trámites administrativos
+- consulta_academica: El usuario pregunta sobre aspectos académicos
+- consulta_medica: El usuario hace una consulta médica
+- desconocido: La intención no corresponde a ninguna categoría conocida
+
+Responde sólo con la intención que corresponda sin explicaciones adicionales. Si no estás seguro, responde "desconocido".
+"""
+    try:
+        response = model.generate(prompt).strip().lower()
+        # Si la respuesta corresponde a una intención válida, asignar confianza media
+        valid_intents = ["saludo", "identidad", "pregunta_capacidades", "cortesia", 
+                         "agradecimiento", "consulta_administrativa", "consulta_academica", 
+                         "consulta_medica", "desconocido"]
+        
+        if response in valid_intents:
+            return response, 0.7
+        else:
+            logger.warning(f"Respuesta no válida del modelo: {response}")
+            return "desconocido", 0.0
+    except Exception as e:
+        logger.error(f"Error al interpretar consulta con modelo: {str(e)}")
+        return "desconocido", 0.0
 
 
 def generate_conversational_response(model, query: str, intent: str, user_name: str = None) -> str:
