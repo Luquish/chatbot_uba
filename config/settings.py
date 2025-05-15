@@ -34,8 +34,8 @@ TOP_P = float(os.getenv('TOP_P', '0.9'))
 TOP_K = int(os.getenv('TOP_K', '50'))
 
 # Configuración RAG
-RAG_NUM_CHUNKS = int(os.getenv('RAG_NUM_CHUNKS', '5'))
-SIMILARITY_THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', '0.3'))
+RAG_NUM_CHUNKS = int(os.getenv('RAG_NUM_CHUNKS', '8'))
+SIMILARITY_THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', '0.2'))
 EMBEDDINGS_DIR = os.getenv('EMBEDDINGS_DIR', 'data/embeddings')
 
 # Gestión del historial de conversación

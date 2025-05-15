@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 # Lista de temas de FAQs para detección
 FAQ_KEYWORDS = {
     'constancia_alumno_regular': [
-        'constancia', 'certificado', 'alumno regular', 'regularidad', 'certificación', 'comprobante'
+        'constancia', 'certificado', 'certificación', 'comprobante', 'tramitar regularidad',
+        'obtener constancia', 'solicitar constancia', 'tramitar certificado', 'solicitar certificado',
+        'ventanilla', 'imprimir constancia'
     ],
     'baja_materia': [
         'baja', 'dar de baja', 'abandonar materia', 'dejar materia', 'anular materia', 'cancelar materia'
@@ -42,6 +44,14 @@ FAQ_KEYWORDS = {
         'prórroga', 'prorroga', 'extender', 'extensión materia', 'ampliar plazo'
     ]
 }
+
+# Palabras clave que indican consulta sobre normativas de regularidad (no sobre el trámite)
+NORMAS_REGULARIDAD_KEYWORDS = [
+    'condiciones de regularidad', 'condiciones para regularidad', 'mantener regularidad',
+    'requisitos regularidad', 'perder regularidad', 'porcentaje aplazos', 'cuántas materias',
+    'tiempo completar carrera', 'materias aprobar', 'condición de alumno', 'normativa regularidad',
+    'régimen de regularidad', 'reglamento regularidad'
+]
 
 # Preguntas específicas conocidas que nos pueden ayudar a identificar la intención
 FAQ_QUESTIONS = {
@@ -179,6 +189,14 @@ def get_faq_intent(query: str) -> Optional[Dict[str, Any]]:
     query_norm = normalize_text(query)
     logger.info(f"Consulta normalizada para FAQs: '{query_norm}'")
     
+    # Revisar primero si la consulta es sobre normativas de regularidad (no sobre el trámite)
+    # En ese caso, no queremos responder con la FAQ de constancia de alumno regular
+    for keyword in NORMAS_REGULARIDAD_KEYWORDS:
+        keyword_norm = normalize_text(keyword)
+        if keyword_norm in query_norm:
+            logger.info(f"Detectada consulta sobre normativas de regularidad, evitando respuesta FAQ")
+            return None
+    
     # Verificar coincidencias exactas con preguntas conocidas
     for intent, questions in FAQ_QUESTIONS.items():
         for question in questions:
@@ -207,6 +225,13 @@ def get_faq_intent(query: str) -> Optional[Dict[str, Any]]:
                 else:
                     score += 1
         
+        # Caso especial para constancia de alumno regular
+        # Reducir la puntuación si solo contiene la palabra "regularidad" sin otras keywords específicas
+        if intent == 'constancia_alumno_regular' and score == 1 and 'regularidad' in query_norm:
+            if not any(kw in query_norm for kw in ['constancia', 'certificado', 'tramitar', 'solicitar', 'obtener']):
+                score = 0
+                logger.info("Se detectó 'regularidad' pero parece ser sobre normativas, no sobre constancia")
+        
         # Normalizar score según cantidad de keywords
         norm_score = score / (len(keywords) * 0.7)  # Factor de ajuste para no requerir todas las keywords
         
@@ -215,6 +240,17 @@ def get_faq_intent(query: str) -> Optional[Dict[str, Any]]:
             best_intent = intent
     
     if best_intent:
+        # Reducir la confianza para constancia_alumno_regular si la consulta parece ser sobre normativas
+        if best_intent == 'constancia_alumno_regular' and any(term in query_norm for term in 
+                                                        ['condicion', 'mantener', 'requisito', 'perder']):
+            best_score = best_score * 0.5
+            logger.info(f"Reduciendo confianza para constancia_alumno_regular: {best_score:.2f}")
+            
+            # Si la confianza cae por debajo del umbral, no considerarla como coincidencia
+            if best_score < 0.25:
+                logger.info("Confianza insuficiente después del ajuste, no se considera coincidencia FAQ")
+                return None
+        
         confidence = min(best_score, 0.85)  # Limitar confianza máxima para coincidencias por keywords
         logger.info(f"Coincidencia por keywords FAQ: {best_intent} (confianza: {confidence:.2f})")
         return {

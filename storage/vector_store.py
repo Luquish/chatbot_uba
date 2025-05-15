@@ -126,3 +126,36 @@ class FAISSVectorStore(VectorStore):
                 results.append(metadata)
                 
         return results 
+
+    def search_by_metadata(self, metadata_filter: Dict, limit: int = 5) -> List[Dict]:
+        """
+        Busca en el almacén por coincidencia exacta de metadatos.
+        
+        Args:
+            metadata_filter (Dict): Diccionario con los filtros de metadatos (ejemplo: {'filename': 'documento.pdf'})
+            limit (int): Número máximo de resultados a devolver
+            
+        Returns:
+            List[Dict]: Lista de documentos que coinciden con los criterios
+        """
+        results = []
+        
+        # Verificar cada documento en los metadatos
+        for idx, row in self.metadata_df.iterrows():
+            # Verificar si todos los filtros coinciden
+            match = True
+            for key, value in metadata_filter.items():
+                if key not in row or row[key] != value:
+                    match = False
+                    break
+            
+            # Si hay coincidencia, añadir a los resultados
+            if match:
+                metadata = row.to_dict()
+                results.append(metadata)
+                
+                # Limitar el número de resultados
+                if len(results) >= limit:
+                    break
+                    
+        return results 

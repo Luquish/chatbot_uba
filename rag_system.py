@@ -245,42 +245,564 @@ class RAGSystem:
         query = query.strip()
         if not query:
             return []
+            
+        # Normalizar consulta
+        query_lower = query.lower().strip()
+        
+        # Sistema de detección de "consultas críticas" basado en entidades clave
+        # Define entidades críticas que deben ser priorizadas (más general que hardcodear solo denuncias)
+        critical_entities = {
+            'denuncia': {
+                'keywords': ['denuncia', 'denunciar', 'denuncias'],
+                'context_words': ['presentar', 'cómo', 'como', 'donde', 'dónde', 'procedimiento'],
+                'article_patterns': ['art. 5', 'artículo 5', 'art. 5º', 'artículo 5º'],
+                'priority': 0.95,  # Prioridad muy alta
+                'secondary_priority': 0.80  # Prioridad para menciones secundarias
+            },
+            'regimen_disciplinario': {
+                'keywords': ['régimen disciplinario', 'regimen disciplinario', 'disciplina', 'sanción', 'sancion'],
+                'context_words': ['suspensión', 'suspension', 'aplazo', 'falta', 'sumario'],
+                'article_patterns': [],
+                'priority': 0.90,
+                'secondary_priority': 0.75
+            },
+            'regularidad': {
+                'keywords': ['regularidad', 'regular', 'condiciones'],
+                'context_words': ['alumno', 'estudiante', 'requisito', 'mantener', 'perder'],
+                'article_patterns': [],
+                'priority': 0.90,
+                'secondary_priority': 0.75
+            }
+            # Se pueden añadir más entidades críticas aquí sin modificar la lógica general
+        }
+        
+        # Detectar si es una consulta sobre una entidad crítica
+        detected_entities = []
+        for entity_name, entity_data in critical_entities.items():
+            # Verificar keywords principales
+            if any(keyword in query_lower for keyword in entity_data['keywords']):
+                # Si también contiene palabras de contexto, es aún más relevante
+                if any(context in query_lower for context in entity_data['context_words']):
+                    detected_entities.append((entity_name, entity_data, True))  # True = alta prioridad
+                else:
+                    detected_entities.append((entity_name, entity_data, False))  # False = prioridad estándar
+        
+        # Realizar búsqueda especializada para entidades críticas detectadas
+        priority_chunks = []
+        if detected_entities:
+            logger.info(f"Detectadas entidades críticas: {[e[0] for e in detected_entities]}")
+            
+            # Buscar chunks relacionados con las entidades detectadas
+            for entity_name, entity_data, is_high_priority in detected_entities:
+                logger.info(f"Realizando búsqueda prioritaria para entidad: {entity_name}")
+                
+                # Buscar chunks que contengan información relevante sobre esta entidad
+                for idx, row in self.vector_store.metadata_df.iterrows():
+                    if 'text' in row:
+                        text = str(row['text']).lower()
+                        
+                        # Verificar si contiene keywords de la entidad
+                        contains_keyword = any(keyword in text for keyword in entity_data['keywords'])
+                        
+                        if contains_keyword:
+                            # Verificar si también contiene patrones de artículos específicos
+                            contains_article = False
+                            if entity_data['article_patterns']:
+                                contains_article = any(pattern in text for pattern in entity_data['article_patterns'])
+                            
+                            # Asignar prioridad según la relevancia
+                            if contains_article or is_high_priority:
+                                metadata = row.to_dict()
+                                metadata['similarity'] = entity_data['priority']
+                                priority_chunks.append(metadata)
+                                logger.info(f"Encontrado chunk prioritario para {entity_name}: {idx}")
+                            else:
+                                metadata = row.to_dict()
+                                metadata['similarity'] = entity_data['secondary_priority']
+                                priority_chunks.append(metadata)
+                                logger.info(f"Encontrado chunk secundario para {entity_name}: {idx}")
+        
+        # Realizar búsqueda principal por embedding
         query_embedding = self.embedding_model.encode([query])[0]
         results = self.vector_store.search(query_embedding, k=k)
+        
+        # Añadir chunks prioritarios si se detectaron entidades críticas
+        if priority_chunks:
+            # Añadir solo chunks que no estén ya en los resultados
+            for chunk in priority_chunks:
+                if not any(r.get('text') == chunk.get('text') for r in results):
+                    results.insert(0, chunk)  # Insertar al inicio para máxima prioridad
+            
+            # Limitar los resultados si exceden k+3
+            if len(results) > k+3:
+                results = results[:k+3]
+                
+            logger.info(f"Se agregaron {len(priority_chunks)} chunks prioritarios")
+        
+        # Extracción de palabras clave de la consulta
+        important_keywords = self.extract_keywords_from_query(query_lower)
+        logger.info(f"Palabras clave extraídas: {important_keywords}")
+        
+        # Si no hay suficientes resultados o la similitud es baja, intentar complementar con palabras clave
+        if len(results) < 3 or (results and results[-1]['similarity'] < self.similarity_threshold + 0.05):
+            logger.info(f"Resultados iniciales insuficientes, intentando complementar con palabras clave: {important_keywords}")
+            
+            # Intentar búsquedas adicionales solo con las palabras clave más importantes
+            for keyword in important_keywords[:3]:  # Usar solo las 3 palabras clave más importantes
+                # Buscar chunks que contengan esta palabra clave
+                keyword_results = []
+                for idx, row in self.vector_store.metadata_df.iterrows():
+                    if 'text' in row and keyword in row['text'].lower():
+                        metadata = row.to_dict()
+                        # Asignar una similitud artificial más baja para no sobrevalorar estos resultados
+                        metadata['similarity'] = 0.3
+                        keyword_results.append(metadata)
+                
+                # Añadir a resultados solo si no están ya incluidos
+                for kr in keyword_results[:2]:  # Limitar a 2 resultados por palabra clave
+                    if not any(r.get('text') == kr.get('text') for r in results):
+                        results.append(kr)
+                        if len(results) >= k + 3:  # Permitir hasta 3 resultados adicionales
+                            break
+        
+        # Log de resultados encontrados
+        logger.info(f"Número total de chunks recuperados: {len(results)}")
+        for i, r in enumerate(results):
+            filename = r.get('filename', 'unknown')
+            similarity = r.get('similarity', 0)
+            text_preview = r.get('text', '')[:100] + '...' if len(r.get('text', '')) > 100 else r.get('text', '')
+            logger.info(f"Chunk {i+1}: {filename} (similitud: {similarity:.2f}) - {text_preview}")
+        
+        # Ordenar por similitud para mantener los mejores resultados primero
+        results = sorted(results, key=lambda x: x.get('similarity', 0), reverse=True)
+        
+        # Limitar al número máximo de resultados
+        results = results[:k+3]  # Permitir hasta 3 resultados adicionales
+        
         return results
+        
+    def extract_keywords_from_query(self, query: str) -> List[str]:
+        """
+        Extrae palabras clave relevantes de la consulta.
+        
+        Args:
+            query (str): Consulta normalizada
+            
+        Returns:
+            List[str]: Lista de palabras clave ordenadas por relevancia
+        """
+        # Limpieza adicional para eliminar signos de puntuación
+        query = re.sub(r'[^\w\s]', ' ', query).strip()
+        
+        # Palabras comunes en español a ignorar
+        stopwords = ['el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'es', 'son', 'y', 'o', 
+                   'a', 'ante', 'bajo', 'con', 'contra', 'de', 'desde', 'en', 'entre', 'hacia', 
+                   'hasta', 'para', 'por', 'segun', 'sin', 'sobre', 'tras', 'como', 'que', 'quien',
+                   'donde', 'cuando', 'cuanto', 'cual', 'cuales', 'cuantos', 'cuantas', 'me', 'mi',
+                   'tu', 'te', 'se', 'nos', 'le', 'lo', 'su', 'sus', 'esto', 'eso', 'aquello', 'este',
+                   'ese', 'aquel', 'esta', 'esa', 'aquella', 'estos', 'esos', 'aquellos', 'estas', 
+                   'esas', 'aquellas']
+        
+        # Dividir en palabras
+        words = query.split()
+        
+        # Filtrar stopwords y palabras cortas
+        keywords = [word for word in words if word not in stopwords and len(word) > 2]
+        
+        # Definir palabras clave del dominio por categorías
+        domain_keywords = {
+            # Términos relacionados con normativas y reglamentos
+            'normativas': {
+                'weight': 10,
+                'terms': ['regimen', 'disciplinario', 'reglamento', 'normativa', 'articulo', 
+                          'resolución', 'regulación', 'estatuto', 'disposición']
+            },
+            # Términos relacionados con denuncias y trámites
+            'denuncias': {
+                'weight': 15,
+                'terms': ['denuncia', 'denuncias', 'denunciar', 'presentar', 'tramitar', 
+                          'procedimiento', 'formular']
+            },
+            # Términos relacionados con la condición de estudiante
+            'condicion_estudiante': {
+                'weight': 10,
+                'terms': ['regularidad', 'regular', 'condicion', 'condiciones', 'alumno', 
+                          'estudiante', 'readmision', 'reincorporacion']
+            },
+            # Términos relacionados con cursadas y materias
+            'cursada': {
+                'weight': 9,
+                'terms': ['materias', 'asignaturas', 'aprobadas', 'aprobar', 'inscripcion', 
+                          'inscribirse', 'recursar', 'aplazo', 'aplazos']
+            },
+            # Términos relacionados con sanciones
+            'sanciones': {
+                'weight': 10,
+                'terms': ['sancion', 'sanciones', 'suspension', 'sumario', 'falta', 'faltas']
+            },
+            # Términos de navegación y búsqueda
+            'navegacion': {
+                'weight': 8,
+                'terms': ['donde', 'dónde', 'como', 'cómo', 'manera', 'forma', 'cuando', 
+                          'cuándo', 'quien', 'quién', 'requisitos']
+            }
+        }
+
+        # Detectar patrones de preguntas específicas sobre procedimientos
+        procedure_patterns = [
+            # Patrones para "cómo hacer algo"
+            r'(como|cómo).*?(hacer|presentar|realizar|tramitar|inscribir)',
+            # Patrones para "dónde hacer algo"
+            r'(donde|dónde).*?(presentar|ir|entregar|solicitar|tramitar)',
+            # Patrones para "cuál es el procedimiento"
+            r'(cual|cuál).*?(procedimiento|forma|trámite|proceso)',
+            # Patrones para "qué necesito para"
+            r'(que|qué).*?(necesito|requiero|debo).*?(para|hacer)',
+            # Patrones genéricos de solicitud
+            r'(quiero|deseo|necesito).*?(hacer|presentar|solicitar|tramitar)'
+        ]
+        
+        # Detectar si es una consulta sobre algún procedimiento
+        is_procedure_query = False
+        for pattern in procedure_patterns:
+            if re.search(pattern, query.lower()):
+                is_procedure_query = True
+                logger.info(f"Detectado patrón de procedimiento: {pattern}")
+                break
+        
+        # Asignar pesos a las palabras clave según su categoría
+        weighted_keywords = []
+        for word in keywords:
+            weight_assigned = False
+            
+            # Buscar en cada categoría
+            for category, data in domain_keywords.items():
+                if word in data['terms']:
+                    # Si es pregunta de procedimiento, dar más peso a palabras de procedimientos
+                    extra_weight = 5 if is_procedure_query and category in ['denuncias', 'navegacion'] else 0
+                    weighted_keywords.append((word, data['weight'] + extra_weight))
+                    weight_assigned = True
+                    break
+            
+            # Si no se encontró en ninguna categoría, asignar peso predeterminado
+            if not weight_assigned:
+                weighted_keywords.append((word, 5))
+        
+        # Ordenar por importancia
+        weighted_keywords.sort(key=lambda x: x[1], reverse=True)
+        
+        # Asegurar que las palabras más importantes estén bien representadas
+        # Si no hay palabras clave del dominio pero se detecta un patrón de procedimiento,
+        # añadir "procedimiento" como palabra clave
+        if is_procedure_query and not any(w[1] > 5 for w in weighted_keywords):
+            weighted_keywords.insert(0, ('procedimiento', 10))
+        
+        # Devolver solo las palabras
+        return [word for word, _ in weighted_keywords]
+
+    def enhance_context(self, query: str, context: str) -> str:
+        """
+        Mejora el contexto para destacar la información más relevante para la consulta.
+        
+        Args:
+            query (str): Consulta del usuario
+            context (str): Contexto recuperado del sistema RAG
+            
+        Returns:
+            str: Contexto mejorado con información destacada
+        """
+        # Sistema de detección de "tipos de consulta" para personalizar el contexto
+        query_types = {
+            'procedimiento': {
+                'patterns': [
+                    r'(como|cómo).*?(hacer|presentar|realizar|obtener)',
+                    r'(donde|dónde).*?(presentar|hacer|obtener|solicitar)',
+                    r'(cual|cuál).*?(procedimiento|forma|manera|paso)',
+                ],
+                'keywords': ['procedimiento', 'paso', 'requisito', 'tramitar', 'presentar', 'realizar'],
+                'highlight': 'PROCEDIMIENTO:'
+            },
+            'normativa': {
+                'patterns': [
+                    r'(que|qué).*?(dice|establece|indica).*?(reglamento|normativa|régimen)',
+                    r'(artículo|art).*?(\d+)',
+                    r'(según|segun).*?(reglamento|normativa|régimen)',
+                ],
+                'keywords': ['reglamento', 'normativa', 'régimen', 'disciplinario', 'artículo', 'resolución'],
+                'highlight': 'NORMATIVA APLICABLE:'
+            },
+            'denuncia': {
+                'patterns': [
+                    r'(denuncia|denunciar|denuncias)',
+                    r'(presentar|hacer).*?(denuncia|denuncias)',
+                ],
+                'keywords': ['denuncia', 'denunciar', 'denuncias'],
+                'highlight': 'INFORMACIÓN SOBRE DENUNCIAS:'
+            },
+            'regularidad': {
+                'patterns': [
+                    r'(regularidad|regular|condición|condicion).*?(alumno|estudiante)',
+                    r'(perder|mantener|recuperar).*?(regularidad|condición|condicion)',
+                ],
+                'keywords': ['regularidad', 'regular', 'condición', 'estudiante', 'alumno'],
+                'highlight': 'CONDICIONES DE REGULARIDAD:'
+            }
+        }
+        
+        # Detectar el tipo de consulta
+        detected_types = []
+        for query_type, data in query_types.items():
+            # Verificar patrones
+            for pattern in data['patterns']:
+                if re.search(pattern, query.lower()):
+                    detected_types.append(query_type)
+                    logger.info(f"Detectado tipo de consulta: {query_type} (patrón: {pattern})")
+                    break
+            
+            # Si no se detectó por patrón, verificar keywords
+            if query_type not in detected_types:
+                if any(keyword in query.lower() for keyword in data['keywords']):
+                    detected_types.append(query_type)
+                    logger.info(f"Detectado tipo de consulta: {query_type} (keywords)")
+        
+        # Extraer palabras clave de la consulta
+        keywords = self.extract_keywords_from_query(query.lower())
+        
+        # Dividir el contexto en párrafos
+        paragraphs = context.split('\n\n')
+        
+        # Identificar si la consulta busca información específica sobre artículos
+        seeking_articles = any(word in query.lower() for word in ['articulo', 'artículo', 'art', 'apartado', 'inciso', 'punto'])
+        
+        # Patrones para detectar referencias a artículos
+        article_patterns = [
+            r'Art\. \d+[º°]?\.', 
+            r'Artículo \d+[º°]?\.', 
+            r'Artículo \d+[º°]?:', 
+            r'Art\. \d+[º°]?:',
+            r'inc\. [a-z]\)'
+        ]
+        
+        # Para cada párrafo, verificar si contiene información relevante
+        enhanced_paragraphs = []
+        for paragraph in paragraphs:
+            relevance_score = 0
+            
+            # Verificar si el párrafo contiene palabras clave de la consulta
+            for keyword in keywords:
+                if keyword in paragraph.lower():
+                    relevance_score += 1
+            
+            # Verificar si el párrafo menciona algún artículo
+            has_article = False
+            specific_article = None
+            for pattern in article_patterns:
+                article_match = re.search(pattern, paragraph)
+                if article_match:
+                    has_article = True
+                    relevance_score += 2
+                    specific_article = article_match.group(0)
+            
+            # Si la consulta busca artículos específicamente, dar más peso a párrafos con artículos
+            if seeking_articles and has_article:
+                relevance_score += 3
+            
+            # Dar más peso a párrafos relevantes para los tipos de consulta detectados
+            for query_type in detected_types:
+                if any(keyword in paragraph.lower() for keyword in query_types[query_type]['keywords']):
+                    relevance_score += 3
+                    
+                    # Destacar especialmente este párrafo con un prefijo
+                    if relevance_score >= 5:
+                        enhanced_paragraphs.append(f"{query_types[query_type]['highlight']}\n{paragraph}")
+                        break
+            else:  # Este else pertenece al for, se ejecuta si no hubo break
+                # Destacar párrafos muy relevantes
+                if relevance_score >= 4:
+                    enhanced_paragraphs.append(f"INFORMACIÓN RELEVANTE:\n{paragraph}")
+                elif relevance_score > 0:
+                    enhanced_paragraphs.append(paragraph)
+                elif has_article:  # Incluir todos los artículos, incluso si no parecen directamente relevantes
+                    enhanced_paragraphs.append(paragraph)
+        
+        # Si no hay párrafos con relevancia, usar el contexto original
+        if not enhanced_paragraphs:
+            return context
+            
+        # Buscar artículos específicos importantes si no fueron incluidos
+        # Esto es más general que solo buscar el Artículo 5 para denuncias
+        for query_type in detected_types:
+            if query_type in ['normativa', 'denuncia', 'regularidad'] and len(enhanced_paragraphs) < 5:
+                for paragraph in paragraphs:
+                    if paragraph not in enhanced_paragraphs:
+                        # Buscar artículos relevantes según el tipo de consulta
+                        relevant_keywords = query_types[query_type]['keywords']
+                        if has_article and any(keyword in paragraph.lower() for keyword in relevant_keywords):
+                            enhanced_paragraphs.append(paragraph)
+                            break
+            
+        # Unir párrafos destacados
+        enhanced_context = '\n\n'.join(enhanced_paragraphs)
+        
+        # Añadir un mensaje introductorio relevante según el tipo de consulta
+        intro_messages = {
+            'procedimiento': "A continuación se detalla el procedimiento según la normativa oficial:",
+            'normativa': "A continuación se citan las disposiciones relevantes de la normativa:",
+            'denuncia': "La siguiente información explica el procedimiento oficial para presentar denuncias:",
+            'regularidad': "A continuación se detallan las condiciones de regularidad según la normativa vigente:"
+        }
+        
+        if detected_types and any(intro_messages.get(t) for t in detected_types):
+            # Usar el primer tipo detectado que tenga mensaje introductorio
+            for t in detected_types:
+                if t in intro_messages:
+                    enhanced_context = f"{intro_messages[t]}\n\n{enhanced_context}"
+                    break
+        
+        return enhanced_context
 
     def generate_response(self, query: str, context: str, sources: List[str] = None) -> str:
         emoji = random.choice(information_emojis)
-        sources_text = f"\nFUENTES CONSULTADAS:\n{', '.join(sources)}" if sources else ""
+        
+        # Preparar la lista de fuentes
+        sources_text = ""
+        if sources and len(sources) > 0:
+            unique_sources = list(set(sources))  # Eliminar duplicados
+            sources_text = f"\nFUENTES CONSULTADAS:\n{', '.join(unique_sources)}"
+        
+        # Analizar el contexto y la consulta para dar mejor estructura a la respuesta
+        context_improved = self.enhance_context(query, context)
+        
+        # Sistema de clasificación de consultas para personalizar instrucciones al modelo
+        query_classifiers = {
+            'denuncias': {
+                'keywords': ['denuncia', 'denunciar', 'denuncias'],
+                'patterns': [
+                    r'(como|cómo|de que forma|donde|dónde).*?(presentar?|hacer|poner|realizar|tramitar).*?(denuncia)',
+                    r'(presentar?|hacer|poner|realizar|tramitar).*?(denuncia)',
+                ],
+                'instructions': """
+INSTRUCCIONES PARA CONSULTAS SOBRE DENUNCIAS:
+- Menciona EXPLÍCITAMENTE que las denuncias se presentan POR ESCRITO
+- Indica claramente que debe incluir una relación circunstanciada de hechos y personas
+- Menciona la alternativa de presentación verbal en casos de urgencia
+- Indica que la denuncia verbal debe ratificarse por escrito dentro de las 48 horas
+- Si hay artículos relevantes en la información, cítalos textualmente
+- Asegúrate de mencionar que la Universidad puede iniciar sumarios de oficio
+"""
+            },
+            'regimen_disciplinario': {
+                'keywords': ['régimen disciplinario', 'regimen disciplinario', 'disciplina', 'sanción', 'sancion'],
+                'patterns': [
+                    r'(sancion|sanción|castigo|pena|amonestacion|expulsión|suspension).*?(estudiante|alumno)',
+                    r'(que|qué).*?(sancion|sanción|castigo|pena).*?(corresponde|aplica)',
+                ],
+                'instructions': """
+INSTRUCCIONES PARA CONSULTAS SOBRE RÉGIMEN DISCIPLINARIO:
+- Cita con precisión los artículos relevantes del Régimen Disciplinario
+- Incluye los tipos de sanciones que pueden aplicarse y su graduación
+- Menciona qué autoridades pueden aplicar cada tipo de sanción
+- Si se mencionan plazos o procedimientos específicos, destácalos claramente
+- Explica claramente qué derechos tiene el estudiante en un proceso disciplinario
+"""
+            },
+            'regularidad': {
+                'keywords': ['regularidad', 'regular', 'condiciones'],
+                'patterns': [
+                    r'(como|cómo).*?(mantener|conseguir|obtener|perder).*?(regularidad|condición|condicion)',
+                    r'(requisito|requisitos).*?(alumno regular|regularidad|condición)',
+                ],
+                'instructions': """
+INSTRUCCIONES PARA CONSULTAS SOBRE REGULARIDAD:
+- Destaca claramente el número mínimo de materias a aprobar en cada período
+- Menciona el porcentaje máximo de aplazos permitidos
+- Explica los plazos establecidos para completar la carrera
+- Si hay excepciones o situaciones especiales, menciónalas
+- Cita los artículos específicos sobre regularidad que sean relevantes
+"""
+            }
+        }
+        
+        # Detectar tipo de consulta
+        specific_instructions = ""
+        for category, data in query_classifiers.items():
+            # Verificar por keywords
+            if any(keyword in query.lower() for keyword in data['keywords']):
+                specific_instructions = data['instructions']
+                break
+                
+            # Verificar por patrones más complejos
+            if not specific_instructions:
+                for pattern in data['patterns']:
+                    if re.search(pattern, query.lower()):
+                        specific_instructions = data['instructions']
+                        break
+                        
         prompt = f"""
 Sos DrCecim, un asistente virtual especializado de la Facultad de Medicina UBA. Tu tarea es proporcionar respuestas sobre administración y trámites de la facultad y deben ser breves, precisas y útiles.
 
 INFORMACIÓN RELEVANTE:
-{context}
+{context_improved}
 {sources_text}
 
 CONSULTA ACTUAL: {query}
+{specific_instructions}
 
 RESPONDE SIGUIENDO ESTAS REGLAS:
 1. Sé muy conciso y directo
-2. Usa la información de los documentos oficiales primero
-3. Si hay documentos específicos, cita naturalmente su origen ("Según el reglamento...")
-4. NO uses NUNCA formato Markdown (como asteriscos para negrita o cursiva) ya que esto no se procesa correctamente en WhatsApp
-5. Para enfatizar texto, usa MAYÚSCULAS, comillas o asteriscos
-6. Usa viñetas con guiones (-) cuando sea útil para mayor claridad
-7. Si la información está incompleta, sugiere contactar a @cecim.nemed por instagram
-8. No hagas preguntas adicionales
+2. Usa la información de los documentos oficiales proporcionados
+3. Si hay artículos, resoluciones o reglamentos específicos, cita exactamente el número y fuente 
+4. No omitas información importante de los documentos relevantes
+5. Si hay documentos específicos, cita naturalmente su origen ("Según el reglamento...")
+6. NO uses formato Markdown ya que esto no se procesa correctamente en WhatsApp
+7. Para enfatizar texto, usa MAYÚSCULAS o comillas
+8. Usa viñetas con guiones (-) cuando sea útil para organizar información
+9. Si la información está incompleta, sugiere contactar a @cecim.nemed por instagram
+10. No inventes o asumas información que no esté en los documentos
+11. No hagas preguntas adicionales en tu respuesta
 """
         try:
             response = self.model.generate(prompt)
-        except Exception:
-            return f"{emoji} Lo siento, hubo un error al generar la respuesta. Por favor, intenta de nuevo o contacta a @cecim.nemed por instagram."
+        except Exception as e:
+            logger.error(f"Error al generar respuesta con el modelo primario: {str(e)}")
+            try:
+                # Intentar con el modelo de respaldo
+                logger.info(f"Intentando con el modelo de respaldo: {self.fallback_model_name}")
+                fallback_model = OpenAIModel(
+                    model_name=self.fallback_model_name,
+                    api_key=self.openai_api_key,
+                    timeout=self.api_timeout,
+                    max_output_tokens=self.max_output_tokens
+                )
+                response = fallback_model.generate(prompt)
+            except Exception as e2:
+                logger.error(f"Error también con el modelo de respaldo: {str(e2)}")
+                return f"{emoji} Lo siento, hubo un error al generar la respuesta. Por favor, intenta de nuevo o contacta a @cecim.nemed por instagram."
+                
+        # Limpiar formatos que no se procesan bien en WhatsApp
         response = re.sub(r'\*\*(.+?)\*\*', r'\1', response)
         response = re.sub(r'\*(.+?)\*', r'\1', response)
         response = re.sub(r'\_\_(.+?)\_\_', r'\1', response)
         response = re.sub(r'\_(.+?)\_', r'\1', response)
+        
+        # Agregar emoji si no tiene uno al inicio
         if not re.match(r'[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]', response.strip()[0:1]):
             response = f"{emoji} {response}"
+        
+        # Comprobar la calidad de la respuesta para tipos específicos de consultas
+        for category, data in query_classifiers.items():
+            if any(keyword in query.lower() for keyword in data['keywords']) or any(re.search(pattern, query.lower()) for pattern in data['patterns']):
+                # Lista de comprobaciones específicas para categorías principales
+                if category == 'denuncias' and "por escrito" not in response.lower():
+                    logger.warning("La respuesta sobre denuncias no incluye información sobre presentación por escrito")
+                    response += "\n\nRECUERDA: Las denuncias DEBEN presentarse POR ESCRITO con todos los detalles relevantes."
+                    
+                elif category == 'regimen_disciplinario' and not any(keyword in response.lower() for keyword in ['apercibimiento', 'suspensión', 'sanción']):
+                    logger.warning("La respuesta sobre régimen disciplinario no menciona tipos de sanciones")
+                    
+                elif category == 'regularidad' and not any(term in response.lower() for term in ['materias', 'aprobar', 'porcentaje', 'plazo']):
+                    logger.warning("La respuesta sobre regularidad no incluye información sobre requisitos clave")
+            
         return response
 
     def update_user_history(self, user_id: str, query: str, response: str):
