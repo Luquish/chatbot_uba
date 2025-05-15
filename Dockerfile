@@ -8,15 +8,28 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar solo los archivos necesarios para producción
+# Copiar requisitos
 COPY requirements-prod.txt .
+
+# Copiar archivo principal a la raíz
+COPY rag_system.py .
+
+# Copiar scripts esenciales
+COPY scripts/__init__.py scripts/
 COPY scripts/deploy_backend.py scripts/
 COPY scripts/run_rag.py scripts/
-COPY scripts/calendar_service.py scripts/
-COPY scripts/date_utils.py scripts/
 COPY scripts/gcs_storage.py scripts/
-COPY scripts/__init__.py scripts/
-COPY config/calendar_config.py config/
+COPY scripts/create_embeddings.py scripts/
+COPY scripts/preprocess.py scripts/
+
+
+# Copiar directorios de módulos
+COPY config/ config/
+COPY services/ services/
+COPY models/ models/
+COPY storage/ storage/
+COPY utils/ utils/
+COPY handlers/ handlers/
 
 # Instalar dependencias de Python
 RUN pip install --no-cache-dir -r requirements-prod.txt

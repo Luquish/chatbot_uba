@@ -49,6 +49,11 @@ spec:
             secretKeyRef:
               name: whatsapp-webhook-verify-token
               key: latest
+        - name: CURSOS_SPREADSHEET_ID
+          valueFrom:
+            secretKeyRef:
+              name: cursos-spreadsheet-id
+              key: latest
         # Google Calendar API configuration
         - name: CALENDAR_ID_EXAMENES
           valueFrom:
@@ -70,7 +75,7 @@ spec:
             secretKeyRef:
               name: calendar-id-tramites
               key: latest
-        - name: GOOGLE_CALENDAR_API_KEY
+        - name: GOOGLE_API_KEY
           valueFrom:
             secretKeyRef:
               name: google-calendar-api-key

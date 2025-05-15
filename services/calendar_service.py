@@ -16,7 +16,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.calendar_config import CALENDAR_CONFIG, CALENDARS
-from scripts.date_utils import DateUtils
+from utils.date_utils import DateUtils
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -26,11 +26,11 @@ date_utils = DateUtils()
 class CalendarService:
     def __init__(self):
         """Inicializa el servicio de Google Calendar."""
-        if not CALENDAR_CONFIG['GOOGLE_CALENDAR_API_KEY']:
-            raise ValueError("Se requiere GOOGLE_CALENDAR_API_KEY en la configuración")
+        if not CALENDAR_CONFIG['GOOGLE_API_KEY']:
+            raise ValueError("Se requiere GOOGLE_API_KEY en la configuración")
         
         self.service = build('calendar', 'v3', 
-                           developerKey=CALENDAR_CONFIG['GOOGLE_CALENDAR_API_KEY'],
+                           developerKey=CALENDAR_CONFIG['GOOGLE_API_KEY'],
                            cache_discovery=False)
         self.timezone = pytz.timezone(CALENDAR_CONFIG['TIMEZONE'])
         logger.info("Servicio de Google Calendar inicializado correctamente")
@@ -252,6 +252,17 @@ class CalendarService:
         if not events:
             return []
             
+        # Mapeo de nombres de días en inglés a español
+        days_map = {
+            'Monday': 'Lunes',
+            'Tuesday': 'Martes',
+            'Wednesday': 'Miércoles',
+            'Thursday': 'Jueves',
+            'Friday': 'Viernes',
+            'Saturday': 'Sábado',
+            'Sunday': 'Domingo'
+        }
+            
         formatted_events = []
         for event in events:
             try:
@@ -263,24 +274,39 @@ class CalendarService:
                 if 'T' not in start:
                     start_dt = datetime.strptime(start, '%Y-%m-%d')
                     end_dt = datetime.strptime(end, '%Y-%m-%d')
-                    start_formatted = start_dt.strftime('%A %d/%m/%Y')
-                    end_formatted = end_dt.strftime('%A %d/%m/%Y')
+                    
+                    # Transformar a formato español
+                    start_day = days_map.get(start_dt.strftime('%A'), start_dt.strftime('%A'))
+                    end_day = days_map.get(end_dt.strftime('%A'), end_dt.strftime('%A'))
+                    
+                    start_formatted = f"{start_day} {start_dt.day} de {start_dt.strftime('%B')}"
+                    end_formatted = f"{end_day} {end_dt.day} de {end_dt.strftime('%B')}"
                 else:
                     # Convertir a zona horaria local
                     start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
                     end_dt = datetime.fromisoformat(end.replace('Z', '+00:00'))
                     start_dt = start_dt.astimezone(self.timezone)
                     end_dt = end_dt.astimezone(self.timezone)
-                    start_formatted = start_dt.strftime('%A %d/%m/%Y %H:%M')
-                    end_formatted = end_dt.strftime('%A %d/%m/%Y %H:%M')
+                    
+                    # Transformar a formato español más amigable
+                    start_day = days_map.get(start_dt.strftime('%A'), start_dt.strftime('%A'))
+                    end_day = days_map.get(end_dt.strftime('%A'), end_dt.strftime('%A'))
+                    
+                    # Si es el mismo día
+                    if start_dt.date() == end_dt.date():
+                        start_formatted = f"{start_day} {start_dt.day} de {start_dt.hour}:{start_dt.minute:02d} hs a {end_dt.hour}:{end_dt.minute:02d} hs"
+                    else:
+                        start_formatted = f"{start_day} {start_dt.day} de {start_dt.hour}:{start_dt.minute:02d} hs"
+                        end_formatted = f"{end_day} {end_dt.day} de {end_dt.hour}:{end_dt.minute:02d} hs"
                 
                 formatted_events.append({
                     'summary': event.get('summary', 'Sin título'),
                     'start': start_formatted,
-                    'end': end_formatted,
+                    'end': end_formatted if 'end_formatted' in locals() else None,  # Solo incluir end si es necesario
                     'description': event.get('description', ''),
                     'is_all_day': 'T' not in start,
-                    'calendar_type': event.get('calendar_type', 'general')
+                    'calendar_type': event.get('calendar_type', 'general'),
+                    'same_day': start_dt.date() == end_dt.date() if 'T' in start else False
                 })
             except Exception as e:
                 logger.error(f"Error al formatear evento: {str(e)}")

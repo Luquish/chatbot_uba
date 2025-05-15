@@ -42,7 +42,7 @@ CALENDARS = {
 
 # Configuración general del calendario
 CALENDAR_CONFIG = {
-    'GOOGLE_CALENDAR_API_KEY': os.getenv('GOOGLE_CALENDAR_API_KEY'),
+    'GOOGLE_API_KEY': os.getenv('GOOGLE_API_KEY'),
     'BASE_URL': 'https://www.googleapis.com/calendar/v3',
     'MAX_RESULTS': 10,
     'TIMEZONE': 'America/Argentina/Buenos_Aires'

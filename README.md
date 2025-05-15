@@ -28,21 +28,41 @@ Este proyecto implementa un asistente virtual para cualquier facultad de la UBA 
 
 ```
 .
+├── rag_system.py           # Clase principal del sistema RAG
 ├── data/
-│   ├── raw/           # Documentos PDF sin procesar
-│   ├── processed/     # Documentos procesados en formato markdown
-│   ├── embeddings/    # Embeddings e índices FAISS generados
-│   └── finetuning/    # Datos para fine-tuning del modelo
-├── models/            # Modelos entrenados o fine-tuneados
+│   ├── raw/                # Documentos PDF sin procesar
+│   ├── processed/          # Documentos procesados en formato markdown
+│   ├── embeddings/         # Embeddings e índices FAISS generados
+│   └── finetuning/         # Datos para fine-tuning del modelo
+├── models/                 # Modelos de IA y clases base
+│   ├── base_model.py       # Clase base para modelos de LLM
+│   ├── openai_model.py     # Implementación para modelos de OpenAI
+│   └── finetuned_model/    # Modelos fine-tuneados
+├── storage/                # Gestión de almacenamiento vectorial
+│   └── vector_store.py     # Implementación de FAISS Vector Store
 ├── scripts/
-│   ├── preprocess.py        # Procesamiento de documentos PDF con Marker
+│   ├── preprocess.py       # Procesamiento de documentos PDF con Marker
 │   ├── create_embeddings.py # Generación de embeddings con OpenAI
-│   ├── run_rag.py           # Sistema RAG para consultas y respuestas
-│   ├── deploy_backend.py    # Backend FastAPI y webhook de WhatsApp
-│   ├── train_finetune.py    # Fine-tuning de modelos con OpenAI
-│   └── auto_setup.py        # Configuración automática del entorno
-├── logs/              # Archivos de registro
-└── config/            # Archivos de configuración
+│   ├── run_rag.py          # Script de ejecución de consola para el sistema RAG
+│   ├── deploy_backend.py   # Backend FastAPI y webhook de WhatsApp
+│   └── train_finetune.py   # Fine-tuning de modelos con OpenAI
+├── handlers/               # Manejadores de intenciones y servicios específicos
+│   ├── intent_handler.py   # Manejo de intenciones de usuario
+│   ├── courses_handler.py  # Manejador de consultas sobre cursos
+│   └── calendar_handler.py # Manejador de eventos de calendario
+├── services/               # Servicios externos integrados
+│   ├── calendar_service.py # Integración con Google Calendar
+│   └── sheets_service.py   # Integración con Google Sheets
+├── utils/                  # Utilidades del sistema
+│   └── date_utils.py       # Utilidades para manejo de fechas
+├── config/                 # Archivos de configuración
+│   ├── settings.py         # Configuraciones generales del sistema
+│   ├── constants.py        # Constantes del sistema
+│   └── calendar_config.py  # Configuración de servicios de calendario
+├── logs/                   # Archivos de registro
+├── docs/                   # Documentación del proyecto
+├── Dockerfile              # Configuración para Docker
+└── docker-compose.yml      # Configuración de servicios Docker
 ```
 
 ## Configuración
@@ -53,17 +73,24 @@ git clone https://github.com/yourusername/chatbot_uba.git
 cd chatbot_uba
 ```
 
-2. Instala las dependencias:
+2. Crea y activa un entorno virtual:
+   (Opcional pero recomendado)
+```bash
+python -m venv venv
+source venv/bin/activate  # En Windows usa: venv\Scripts\activate
+```
+
+3. Instala las dependencias:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Crea un archivo `.env` basado en el template `.env.example`:
+4. Crea un archivo `.env` basado en el template `.env.example`:
 ```bash
 cp .env.example .env
 ```
 
-4. Configura las variables de entorno en el archivo `.env`:
+5. Configura las variables de entorno en el archivo `.env`:
 
 ### Variables de Entorno Principales
 
@@ -76,7 +103,7 @@ CALENDAR_ID_EXAMENES=                            # ID del calendario de exámene
 CALENDAR_ID_INSCRIPCIONES=                       # ID del calendario de inscripciones
 CALENDAR_ID_CURSADA=                             # ID del calendario de cursada
 CALENDAR_ID_TRAMITES=                            # ID del calendario de trámites
-GOOGLE_CALENDAR_API_KEY=                         # API Key de Google Calendar
+GOOGLE_API_KEY=                         # API Key de Google Calendar
 
 # Configuración de WhatsApp Business API
 WHATSAPP_API_TOKEN=                              # Token de la API de WhatsApp
@@ -120,7 +147,6 @@ API_TIMEOUT=30                                   # Timeout para llamadas a APIs 
 ## Flujo de Trabajo
 
 ### Desarrollo Local
-
 1. **Procesamiento de Documentos:**
 ```bash
 python scripts/preprocess.py
