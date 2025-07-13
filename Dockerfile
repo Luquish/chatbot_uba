@@ -7,8 +7,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y build-essential
 
 # Install Python dependencies
-COPY requirements-prod.txt .
-RUN pip install --no-cache-dir -r requirements-prod.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Stage 2: Final image ---
 FROM python:3.11-slim
@@ -23,12 +23,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY main.py .
 COPY rag_system.py .
 
-# Essential scripts
+# Essential scripts (only GCS storage and RAG runner)
 COPY scripts/__init__.py scripts/
 COPY scripts/run_rag.py scripts/
 COPY scripts/gcs_storage.py scripts/
-COPY scripts/create_embeddings.py scripts/
-COPY scripts/preprocess.py scripts/
 
 # Module directories
 COPY config/ config/

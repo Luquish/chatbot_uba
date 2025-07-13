@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 from unidecode import unidecode
 
-from config.settings import logger, PRIMARY_MODEL, FALLBACK_MODEL, EMBEDDING_MODEL, MAX_OUTPUT_TOKENS, API_TIMEOUT, RAG_NUM_CHUNKS, SIMILARITY_THRESHOLD, EMBEDDINGS_DIR, GOOGLE_API_KEY, CURSOS_SPREADSHEET_ID
+from config.settings import logger, PRIMARY_MODEL, FALLBACK_MODEL, EMBEDDING_MODEL, MAX_OUTPUT_TOKENS, API_TIMEOUT, RAG_NUM_CHUNKS, SIMILARITY_THRESHOLD, EMBEDDINGS_DIR, GOOGLE_API_KEY, CURSOS_SPREADSHEET_ID, USE_GCS, GCS_BUCKET_NAME, GCS_AUTO_REFRESH
 from config.constants import INTENT_EXAMPLES, GREETING_WORDS, information_emojis, greeting_emojis, warning_emojis, success_emojis, SHEET_COURSE_KEYWORDS, CALENDAR_INTENT_MAPPING, CALENDAR_MESSAGES
 from models.openai_model import OpenAIModel, OpenAIEmbedding
 from storage.vector_store import FAISSVectorStore
@@ -53,10 +53,21 @@ class RAGSystem:
             api_key=self.openai_api_key,
             timeout=self.api_timeout
         )
+        # Inicializar vector store con configuración automática para GCS
         self.vector_store = FAISSVectorStore(
             str(self.embeddings_dir / 'faiss_index.bin'),
-            str(self.embeddings_dir / 'metadata.csv')
+            str(self.embeddings_dir / 'metadata.csv'),
+            threshold=self.similarity_threshold,
+            bucket_name=GCS_BUCKET_NAME if USE_GCS else None,
+            auto_refresh=GCS_AUTO_REFRESH if USE_GCS else False
         )
+        
+        # Log de configuración
+        if USE_GCS:
+            logger.info(f"Vector store configurado con GCS: {GCS_BUCKET_NAME}")
+            logger.info(f"Auto-refresh habilitado: {GCS_AUTO_REFRESH}")
+        else:
+            logger.info("Vector store configurado para uso local")
         self.date_utils = DateUtils()
         try:
             self.calendar_service = CalendarService()
