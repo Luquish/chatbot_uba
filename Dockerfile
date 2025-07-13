@@ -12,11 +12,11 @@ RUN apt-get update && apt-get install -y \
 COPY requirements-prod.txt .
 
 # Copiar archivo principal a la raíz
+COPY main.py .
 COPY rag_system.py .
 
 # Copiar scripts esenciales
 COPY scripts/__init__.py scripts/
-COPY scripts/deploy_backend.py scripts/
 COPY scripts/run_rag.py scripts/
 COPY scripts/gcs_storage.py scripts/
 COPY scripts/create_embeddings.py scripts/
@@ -42,4 +42,4 @@ ENV ENVIRONMENT=production
 EXPOSE 8080
 
 # Comando para ejecutar la aplicación
-CMD ["python", "scripts/deploy_backend.py"] 
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

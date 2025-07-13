@@ -44,7 +44,7 @@ Este proyecto implementa un asistente virtual para cualquier facultad de la UBA 
 │   ├── preprocess.py       # Procesamiento de documentos PDF con Marker
 │   ├── create_embeddings.py # Generación de embeddings con OpenAI
 │   ├── run_rag.py          # Script de ejecución de consola para el sistema RAG
-│   ├── deploy_backend.py   # Backend FastAPI y webhook de WhatsApp
+│   ├── main.py             # Backend FastAPI y webhook de WhatsApp
 │   └── train_finetune.py   # Fine-tuning de modelos con OpenAI
 ├── handlers/               # Manejadores de intenciones y servicios específicos
 │   ├── intent_handler.py   # Manejo de intenciones de usuario
@@ -167,7 +167,7 @@ Este script:
 
 3. **Ejecución Local:**
 ```bash
-python scripts/deploy_backend.py
+uvicorn main:app --reload
 ```
 
 ### Despliegue con Docker
@@ -186,7 +186,7 @@ El proyecto está configurado para ser desplegado usando Docker, separando el pr
 #### Archivos en Producción
 
 Solo los archivos necesarios para la ejecución se incluyen en el contenedor:
-- `scripts/deploy_backend.py`
+- `main.py`
 - `scripts/run_rag.py`
 - `scripts/calendar_service.py`
 - `scripts/date_utils.py`
@@ -351,7 +351,7 @@ Esta adaptación está implementada en el módulo `scripts/gcs_storage.py`, que 
    ```dockerfile
    # Copiar solo los archivos necesarios para producción
    COPY requirements-prod.txt .
-   COPY scripts/deploy_backend.py scripts/
+   COPY main.py .
    COPY scripts/run_rag.py scripts/
    COPY scripts/calendar_service.py scripts/
    COPY scripts/date_utils.py scripts/
