@@ -4,7 +4,6 @@ import json
 import requests
 from typing import Dict, Any
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from run_rag import RAGSystem
 from handlers.whatsapp_handler import WhatsAppHandler
@@ -63,14 +62,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configurar CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Middleware para manejo directo de WebHooks de WhatsApp en producción
 if ENVIRONMENT == "production":
@@ -155,26 +146,26 @@ async def whatsapp_webhook(request: Request):
         # Obtener el cuerpo de la solicitud
         body = await request.body()
         
-        # COMENTADO TEMPORALMENTE: Validar la firma del webhook en producción
-        # if ENVIRONMENT == "production":
-        #     signature = request.headers.get("x-hub-signature-256", "")
-        #     if not signature:
-        #         logger.error("Firma no encontrada en headers")
-        #         raise HTTPException(status_code=403, detail="Firma no encontrada")
-                
-        #     # Calcular y verificar firma
-        #     import hmac
-        #     import hashlib
-            
-        #     expected_signature = hmac.new(
-        #         WHATSAPP_WEBHOOK_VERIFY_TOKEN.encode(),
-        #         body,
-        #         hashlib.sha256
-        #     ).hexdigest()
-            
-        #     if not hmac.compare_digest(f"sha256={expected_signature}", signature):
-        #         logger.error("Firma inválida")
-        #         raise HTTPException(status_code=403, detail="Firma inválida")
+        # Validar la firma del webhook en producción
+        if ENVIRONMENT == "production":
+            signature = request.headers.get("x-hub-signature-256", "")
+            if not signature:
+                logger.error("Firma no encontrada en headers")
+                raise HTTPException(status_code=403, detail="Firma no encontrada")
+
+            # Calcular y verificar firma
+            import hmac
+            import hashlib
+
+            expected_signature = hmac.new(
+                WHATSAPP_WEBHOOK_VERIFY_TOKEN.encode(),
+                body,
+                hashlib.sha256
+            ).hexdigest()
+
+            if not hmac.compare_digest(f"sha256={expected_signature}", signature):
+                logger.error("Firma inválida")
+                raise HTTPException(status_code=403, detail="Firma inválida")
         
         # Parsear el cuerpo JSON
         try:

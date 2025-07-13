@@ -455,6 +455,10 @@ Esta adaptación está implementada en el módulo `scripts/gcs_storage.py`, que 
    gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=[SERVICE_NAME]" --limit=50
    ```
 
+5. **Seguridad del webhook**: En entorno de producción se valida la cabecera `X-Hub-Signature-256` usando el token configurado en `WHATSAPP_WEBHOOK_VERIFY_TOKEN`. Esta firma garantiza que los mensajes provienen de WhatsApp Business.
+
+6. **CORS deshabilitado**: Como la API no se consume desde navegadores, se eliminó el middleware de CORS para reducir la superficie de ataque.
+
 ### Monitoreo y Mantenimiento
 
 - Los logs se encuentran en la carpeta `logs/`
