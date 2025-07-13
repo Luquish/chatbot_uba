@@ -15,7 +15,6 @@ import numpy as np
 import huggingface_hub
 import psutil  # Añadido para verificar la memoria disponible
 import re
-from handlers.intent_handler import get_intent_response
 
 # Cargar variables de entorno
 load_dotenv()
@@ -867,92 +866,327 @@ Responde ÚNICAMENTE a la consulta con información del contexto. SOLO GENERA UN
                 return f"👨‍⚕️ Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
         
     def process_query(self, query: str, num_chunks: int = None) -> Dict:
-        """Procesa una consulta utilizando RAG o respuestas predefinidas."""
+        """
+        Procesa una consulta utilizando RAG para generar una respuesta.
+        
+        Args:
+            query (str): Consulta del usuario
+            num_chunks (int, optional): Número de fragmentos a recuperar
+            
+        Returns:
+            Dict: Diccionario con la respuesta y detalles
+        """
         try:
-            intent_response = get_intent_response(query)
-            if intent_response:
+            # Lista de emojis para enriquecer las respuestas
+            information_emojis = ["📚", "📖", "ℹ️", "📊", "🔍", "📝", "📋", "📈", "📌", "🧠"]
+            greeting_emojis = ["👋", "😊", "🤓", "👨‍⚕️", "👩‍⚕️", "🎓", "🌟"]
+            
+            # Seleccionar emojis de manera pseudo-aleatoria pero consistente
+            import hashlib
+            query_hash = int(hashlib.md5(query.encode()).hexdigest(), 16)
+            info_emoji = information_emojis[query_hash % len(information_emojis)]
+            greeting_emoji = greeting_emojis[query_hash % len(greeting_emojis)]
+            
+            # Lista de palabras de saludo
+            greeting_words = ['hola', 'buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias', 
+                              'buenas tardes', 'buenas noches', 'saludos', 'que tal', 'qué tal', 'como va', 'cómo va']
+            
+            # Verificar si es una consulta sobre el nombre del bot
+            name_queries = [
+                "cómo te llamás", "como te llamas", "¿cómo te llamas?", "¿como te llamas?", "cómo te llamas?", "como te llamas?",
+                "cuál es tu nombre", "cual es tu nombre", "¿cuál es tu nombre?", "¿cual es tu nombre?", "cuál es tu nombre?", "cual es tu nombre?",
+                "quién eres", "quien eres", "¿quién eres?", "¿quien eres?", "quién eres?", "quien eres?",
+                "cómo te dicen", "como te dicen", "¿cómo te dicen?", "¿como te dicen?", "cómo te dicen?", "como te dicen?",
+                "tu nombre", "cómo te llaman", "como te llaman",
+                "cuál es tu apellido", "cual es tu apellido"
+            ]
+            
+            # Verificación más estricta para consultas sobre el nombre
+            is_name_query = False
+            clean_query = query.lower().strip()
+            if clean_query in name_queries:
+                is_name_query = True
+            else:
+                # Si no hay coincidencia exacta, intentar coincidencia parcial
+                is_name_query = any(phrase in clean_query for phrase in name_queries)
+            
+            # Verificación adicional para "Cómo te llamas?" exactamente como en WhatsApp
+            if "cómo te llamas" in clean_query or "como te llamas" in clean_query:
+                is_name_query = True
+                
+            print(f"DEBUG - Query: '{query}', is_name_query: {is_name_query}")  # Depuración
+            
+            # Si pregunta por el nombre, responder directamente
+            if is_name_query:
+                name_response = f"👨‍⚕️ Me llamo DrCecim. Soy un asistente virtual especializado en información académica de la Facultad de Medicina de la Universidad de Buenos Aires."
+                
                 return {
                     "query": query,
-                    "response": intent_response,
+                    "response": name_response,
                     "relevant_chunks": [],
                     "sources": []
                 }
-
+            
+            # 2. SEGUNDO: Verificar si es una consulta sobre las capacidades del bot
+            meta_queries = [
+                "qué hace", "que hace", "qué podés hacer", "que podes hacer",
+                "en qué me podés ayudar", "en que me podes ayudar",
+                "cómo me podés ayudar", "como me podes ayudar",
+                "qué información tenés", "que informacion tenes",
+                "qué información conocés", "que informacion conoces",
+                "qué sabés", "que sabes", "para qué servís", "para que servis",
+                "qué tipo de consulta", "que tipo de consulta",
+                "qué tipo de información", "que tipo de informacion",
+                "qué tipo de preguntas", "que tipo de preguntas",
+                "qué consultas puedo hacer", "que consultas puedo hacer",
+                "qué me podés decir", "que me podes decir",
+                "qué puedo consultarte", "que puedo consultarte",
+                "qué servicios ofrece", "que servicios ofrece",
+                "cuáles son tus funciones", "cuales son tus funciones",
+                "sobre qué temas", "sobre que temas", "qué temas", "que temas",
+                "temas de consulta", "qué materias", "que materias",
+                "de qué me podés informar", "de que me podes informar", "qué me puedes informar",
+                "sobre qué podés ayudarme", "sobre que podes ayudarme",
+                "qué me puedes informar", "que puedes decirme", "qué puedes decirme", 
+                "que puedo preguntarte", "qué puedo preguntarte"
+            ]
+            
+            # Mejor detección de meta-queries
+            is_meta_query = False
+            clean_query = query.lower().strip()
+            
+            # Comprobar coincidencia exacta primero
+            if clean_query in meta_queries:
+                is_meta_query = True
+            else:
+                # Si no hay coincidencia exacta, buscar coincidencias parciales
+                for phrase in meta_queries:
+                    if phrase in clean_query:
+                        is_meta_query = True
+                        break
+                        
+                # Verificación adicional para consultas como "¿Qué me puedes informar?"
+                if re.search(r'(?:qué|que).*(?:pued(?:o|es)|pod(?:és|es)).*(?:informar|ayudar|consultar|preguntar)', clean_query):
+                    is_meta_query = True
+            
+            if is_meta_query:
+                meta_response = f"👨‍⚕️ Puedo ayudarte con consultas sobre:\n- Reglamento académico de la Facultad de Medicina 📚\n- Condiciones de regularidad para alumnos 📋\n- Régimen disciplinario y sanciones 🎓\n- Trámites administrativos para estudiantes 📄\n- Requisitos académicos y normativas 📌"
+                
+                return {
+                    "query": query,
+                    "response": meta_response,
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # 3. TERCERO: Identificar si hay un saludo en la consulta
+            has_greeting = False
+            greeting_used = None
+            for word in greeting_words:
+                if word in query.lower().split() or query.lower().strip().startswith(word):
+                    has_greeting = True
+                    greeting_used = word
+                    break
+            
+            # Caso especial para "buenas" que puede estar al inicio sin espacio
+            if not has_greeting and (query.lower().strip().startswith('buenas')):
+                has_greeting = True
+                greeting_used = 'buenas'
+            
+            # Determinar si es solo un saludo sin pregunta
+            is_greeting_only = query.lower().strip() in greeting_words or any(
+                query.lower().strip() == word or query.lower().strip().startswith(word + " ")
+                for word in greeting_words
+            )
+            
+            # Determinar el saludo a usar en la respuesta si hay uno en la consulta
+            greeting_prefix = ""
+            if has_greeting:
+                if greeting_used in ['hola', 'saludos']:
+                    greeting_prefix = f"👨‍⚕️ ¡Hola! Soy DrCecim. "
+                elif greeting_used in ['buenas', 'buen día', 'buen dia', 'buenos días', 'buenos dias']:
+                    greeting_prefix = f"👨‍⚕️ ¡Buenos días! Soy DrCecim. "
+                elif greeting_used == 'buenas tardes':
+                    greeting_prefix = f"👨‍⚕️ ¡Buenas tardes! Soy DrCecim. "
+                elif greeting_used == 'buenas noches':
+                    greeting_prefix = f"👨‍⚕️ ¡Buenas noches! Soy DrCecim. "
+                elif greeting_used in ['qué tal', 'que tal', 'cómo va', 'como va']:
+                    greeting_prefix = f"👨‍⚕️ ¿Cómo va? Soy DrCecim. "
+                else:
+                    greeting_prefix = f"👨‍⚕️ ¡Buenas! Soy DrCecim. "
+            else:
+                greeting_prefix = f"👨‍⚕️ "
+            
+            # Si es solo un saludo, responder directamente sin buscar embeddings
+            if is_greeting_only:
+                greeting_responses = [
+                    f"👨‍⚕️ ¡Hola! Soy DrCecim, tu asistente de la Facultad de Medicina. ¿En qué puedo ayudarte hoy?",
+                    f"👨‍⚕️ ¡Buenas! Soy DrCecim, ¿en qué puedo asistirte hoy?",
+                    f"👨‍⚕️ ¿Cómo va? Soy DrCecim, tu asistente académico. ¿Con qué puedo ayudarte?",
+                    f"👨‍⚕️ Hola, soy DrCecim. ¿En qué puedo orientarte hoy?",
+                    f"👨‍⚕️ Saludos. Soy DrCecim, ¿necesitas ayuda con algún tema en particular?",
+                    f"👨‍⚕️ ¡Buen día! Soy DrCecim, asistente de la Facultad de Medicina. ¿En qué puedo colaborar?"
+                ]
+                import random
+                return {
+                    "query": query,
+                    "response": random.choice(greeting_responses),
+                    "relevant_chunks": [],
+                    "sources": []
+                }
+            
+            # 5. QUINTO: Para preguntas normales, seguir el flujo habitual de RAG
             if num_chunks is None:
                 num_chunks = int(os.getenv('RAG_NUM_CHUNKS', 3))
-
+            
+            # Logging de la consulta para debugging
             logger.info(f"Procesando consulta: '{query}'")
-
+            
+            # Encontrar fragmentos relevantes
             relevant_chunks = self.retrieve_relevant_chunks(query, k=num_chunks)
-
+            
+            # Verificar si se encontraron chunks relevantes
             if not relevant_chunks:
-                standard_no_info_response = (
-                    "👨‍⚕️ No tengo información suficiente sobre esto en mis documentos. "
-                    "Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar."
-                )
+                logger.warning("No se encontraron chunks relevantes para la consulta.")
+                # Respuesta estándar cuando no hay información disponible
+                if has_greeting:
+                    standard_no_info_response = f"👨‍⚕️ ¡Hola! Soy DrCecim. No tengo información suficiente sobre esto en mis documentos. Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar. ¡Estoy aquí para ayudarte!"
+                else:
+                    standard_no_info_response = f"👨‍⚕️ No tengo información suficiente sobre esto en mis documentos. Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar. ¡Estoy aquí para ayudarte!"
+                
                 return {
                     "query": query,
                     "response": standard_no_info_response,
                     "relevant_chunks": [],
                     "sources": []
                 }
-
+            
+            # Construir contexto de manera segura, incluyendo la fuente de cada fragmento
             context_chunks = []
             sources = []
-            relevance_threshold = float(os.getenv('RELEVANCE_THRESHOLD', '20.0'))
-            for chunk in relevant_chunks:
-                content = chunk.get('content') or chunk.get('text', '')
-                if not content.strip():
-                    continue
-
-                if 'filename' in chunk and chunk['filename']:
-                    source = os.path.basename(chunk['filename']).replace('.pdf', '')
+            
+            # Establecer un umbral de relevancia mínima - mucho más permisivo ahora
+            relevance_threshold = float(os.getenv('RELEVANCE_THRESHOLD', '20.0'))  # Aumentado desde 17.0 a 20.0
+            has_relevant_content = False
+            
+            for i, chunk in enumerate(relevant_chunks):
+                # Verificar si el chunk tiene contenido
+                chunk_has_content = False
+                content = ""
+                
+                if "content" in chunk and chunk["content"].strip():
+                    content = chunk["content"]
+                    chunk_has_content = True
+                elif "text" in chunk and chunk["text"].strip():
+                    content = chunk["text"]
+                    chunk_has_content = True
+                else:
+                    logger.warning(f"Chunk sin contenido válido: {chunk}")
+                    continue  # Saltar este chunk
+                
+                # Evaluar si el chunk es realmente relevante para la consulta
+                if 'distance' in chunk:
+                    distance = chunk['distance']
+                    logger.info(f"Chunk {i+1} distancia: {distance}")
+                    if distance < relevance_threshold:
+                        has_relevant_content = True
+                        logger.info(f"Chunk {i+1} es relevante (distancia: {distance})")
+                
+                # Obtener información de la fuente
+                source = ""
+                if "filename" in chunk and chunk["filename"]:
+                    source = chunk["filename"]
+                    # Extraer solo el nombre del archivo sin la ruta
+                    source = os.path.basename(source)
+                    # Eliminar extensión .pdf
+                    source = source.replace('.pdf', '')
                     if source and source not in sources:
                         sources.append(source)
-                else:
-                    source = ''
-
-                if 'distance' in chunk and chunk['distance'] >= relevance_threshold:
-                    continue
-
-                formatted_chunk = f"Información de {source}:\n{content}"
-                context_chunks.append(formatted_chunk)
-
+                
+                # Solo agregar chunks con contenido válido
+                if chunk_has_content:
+                    # Formatear el fragmento con su fuente pero sin usar FRAGMENTO en el mensaje
+                    # para evitar que el modelo lo copie en la respuesta
+                    formatted_chunk = f"Información de {source}:\n{content}"
+                    context_chunks.append(formatted_chunk)
+                    logger.info(f"Agregado chunk relevante de {source} (distancia: {chunk.get('distance', 'N/A')})")
+            
+            # Unir los chunks para formar el contexto
             context = '\n\n'.join(context_chunks)
-            if not context.strip():
-                standard_no_info_response = (
-                    "👨‍⚕️ No tengo información suficiente sobre esto en mis documentos. "
-                    "Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar."
-                )
+            
+            # Si no hay contexto después de filtrar o no hay contenido relevante, usar mensaje informativo
+            if not context.strip() or not has_relevant_content:
+                logger.warning("No se encontró contexto suficientemente relevante para la consulta.")
+                # Respuesta estándar cuando no hay información disponible
+                if has_greeting:
+                    standard_no_info_response = f"👨‍⚕️ ¡Hola! Soy DrCecim. No tengo información suficiente sobre esto en mis documentos. Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar. ¡Estoy aquí para ayudarte!"
+                else:
+                    standard_no_info_response = f"👨‍⚕️ No tengo información suficiente sobre esto en mis documentos. Si necesitas información específica sobre otro tema relacionado con la Facultad de Medicina, no dudes en preguntar. ¡Estoy aquí para ayudarte!"
+                
                 return {
                     "query": query,
                     "response": standard_no_info_response,
                     "relevant_chunks": [],
                     "sources": []
                 }
-
+            
+            logger.info(f"Se encontraron {len(context_chunks)} fragmentos relevantes de {len(sources)} fuentes: {', '.join(sources)}")
+            
+            # Generar respuesta con el contexto y las fuentes
             response = self.generate_response(query, context, sources)
-
-            if sources:
-                clean_sources = [s.replace('_', ' ').replace('-', ' ') for s in sources]
-                if len(clean_sources) == 1:
-                    response = f"{response}\n\nEsta información la puedes encontrar en: {clean_sources[0]}"
+            
+            # Asegurar que la respuesta tenga el formato adecuado
+            if has_greeting and "DrCecim" not in response:
+                # Verificar si la respuesta ya tiene el emoji del doctor
+                if response.startswith("👨‍⚕️"):
+                    # Reemplazar el emoji con el saludo completo
+                    response = greeting_prefix + response[5:].lstrip()
                 else:
-                    response = f"{response}\n\nEsta información la puedes encontrar en: {', '.join(clean_sources)}"
-
+                    response = greeting_prefix + response
+            elif not has_greeting and "DrCecim" in response:
+                # Si no hay saludo, eliminar menciones a DrCecim
+                response = re.sub(r'(?i)(Soy DrCecim\.?|DrCecim aquí\.?|DrCecim:)\s*', f'👨‍⚕️ ', response)
+            
+            if not any(emoji in response for emoji in information_emojis + greeting_emojis):
+                response = f"{response} {info_emoji}"
+            
+            # Agregar fuente de información si hay sources
+            final_response = response
+            if sources and len(sources) > 0:
+                # Limpiar nombres de fuentes (quitar .pdf, guiones bajos, etc.)
+                clean_sources = []
+                for source in sources:
+                    # Reemplazar guiones bajos y guiones con espacios
+                    clean_source = source.replace('_', ' ').replace('-', ' ')
+                    clean_sources.append(clean_source)
+                
+                # Agregar fuente al final del mensaje
+                if len(clean_sources) == 1:
+                    final_response = f"{response}\n\nEsta información la puedes encontrar en: {clean_sources[0]}"
+                else:
+                    sources_text = ", ".join(clean_sources)
+                    final_response = f"{response}\n\nEsta información la puedes encontrar en: {sources_text}"
+            
             return {
                 "query": query,
-                "response": response,
+                "response": final_response,
                 "relevant_chunks": relevant_chunks,
                 "sources": sources
             }
+            
         except Exception as e:
             logger.error(f"Error en process_query: {str(e)}", exc_info=True)
+            if has_greeting:
+                error_response = f"👨‍⚕️ Soy DrCecim. Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
+            else:
+                error_response = f"👨‍⚕️ Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo."
+            
             return {
                 "query": query,
-                "response": "👨‍⚕️ Lo siento, tuve un problema procesando tu consulta. Por favor, intenta de nuevo.",
+                "response": error_response,
                 "error": str(e)
             }
+
 def main():
     """Función principal para ejecutar el sistema RAG."""
     # Inicializar sistema RAG
