@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  chatbot:
+    volumes:
+      - ./data/embeddings:/app/data/embeddings
+      - ./scripts:/app/scripts
+      - ./config:/app/config
+      - ./models:/app/models
+      - ./storage:/app/storage
+      - ./utils:/app/utils
+      - ./handlers:/app/handlers
+      - ./services:/app/services
+      - ./rag_system.py:/app/rag_system.py

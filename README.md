@@ -63,7 +63,8 @@ Este proyecto implementa un asistente virtual para cualquier facultad de la UBA 
 ├── logs/                   # Archivos de registro
 ├── docs/                   # Documentación del proyecto
 ├── Dockerfile              # Configuración para Docker
-└── docker-compose.yml      # Configuración de servicios Docker
+├── docker-compose.yml      # Configuración del servicio (producción)
+└── docker-compose.override.yml # Montajes de desarrollo
 ```
 
 ## Configuración
@@ -184,7 +185,8 @@ El proyecto está configurado para ser desplegado usando Docker, separando el pr
 ```
 .
 ├── Dockerfile           # Configuración de la imagen
-├── docker-compose.yml   # Configuración del servicio
+├── docker-compose.yml   # Configuración del servicio (producción)
+├── docker-compose.override.yml # Montajes de desarrollo
 └── .dockerignore        # Archivos excluidos del contenedor
 ```
 
@@ -215,6 +217,7 @@ docker-compose build
 ```bash
 docker-compose up -d
 ```
+Esto cargará automáticamente `docker-compose.override.yml` en desarrollo para montar los volúmenes necesarios.
 
 3. **Ver logs:**
 ```bash
