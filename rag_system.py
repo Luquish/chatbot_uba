@@ -13,7 +13,11 @@ from config.constants import INTENT_EXAMPLES, GREETING_WORDS, information_emojis
 from models.openai_model import OpenAIModel, OpenAIEmbedding
 from storage.vector_store import FAISSVectorStore
 from utils.date_utils import DateUtils
-from handlers.intent_handler import normalize_intent_examples, get_query_intent
+from handlers.intent_handler import (
+    normalize_intent_examples,
+    get_query_intent,
+    handle_conversational_intent,
+)
 from handlers.courses_handler import handle_sheet_course_query
 from handlers.calendar_handler import get_calendar_events
 from handlers.faqs_handler import handle_faq_query
@@ -81,15 +85,6 @@ class RAGSystem:
         query_original = query
         query_lower = query.lower().strip()
         
-        # Saludo simple
-        if len(query.split()) <= 2 and any(saludo in query_lower for saludo in GREETING_WORDS):
-            return {
-                "query": query_original,
-                "response": f"{random.choice(greeting_emojis)} ¡Hola{(' ' + user_name) if user_name else ''}! Soy DrCecim. ¿En qué puedo ayudarte hoy sobre la Facultad de Medicina UBA?",
-                "query_type": "saludo",
-                "relevant_chunks": [], "sources": []
-            }
-        
         # Determinar intención - primero con keywords para evitar llamadas innecesarias a la API
         # Pasamos None como embedding_model para usar solo keywords en primera instancia
         intent, confidence = get_query_intent(query_original, None, self.normalized_intent_examples)
@@ -111,68 +106,12 @@ class RAGSystem:
         else:
             logger.info(f"Intención detectada por keywords: {intent} (confianza: {confidence:.2f})")
         
-        # Responder según la intención detectada
-        if intent == 'pregunta_capacidades' and confidence > 0.5:
-            emoji = random.choice(information_emojis)
-            return {
-                "query": query_original,
-                "response": f"{emoji} Puedo ayudarte con información sobre:\n- Trámites administrativos y procesos académicos de la facultad\n- Fechas de exámenes e inscripciones\n- Requisitos de cursada y regularidad\n- Información sobre cursos y programas\n- Calendario académico y eventos importantes\n\nSi necesitas información específica, ¡pregúntame!",
-                "query_type": "pregunta_capacidades",
-                "relevant_chunks": [], "sources": []
-            }
-            
-        elif intent == 'identidad' and confidence > 0.5:
-            emoji = random.choice(greeting_emojis)
-            return {
-                "query": query_original,
-                "response": f"{emoji} Me llamo DrCecim y soy un asistente virtual especializado de la Facultad de Medicina UBA. Estoy aquí para ayudarte con información sobre trámites, procedimientos administrativos y consultas académicas.",
-                "query_type": "identidad",
-                "relevant_chunks": [], "sources": []
-            }
-            
-        elif intent == 'pregunta_nombre' and confidence > 0.5:
-            emoji = random.choice(greeting_emojis)
-            if user_name:
-                return {
-                    "query": query_original,
-                    "response": f"{emoji} Tu nombre es {user_name}. Es un placer ayudarte con información sobre la Facultad de Medicina UBA.",
-                    "query_type": "pregunta_nombre",
-                    "relevant_chunks": [], "sources": []
-                }
-            else:
-                return {
-                    "query": query_original,
-                    "response": f"{emoji} No tengo registrado tu nombre en este momento. Si quieres, puedes presentarte y lo recordaré para futuras consultas.",
-                    "query_type": "pregunta_nombre",
-                    "relevant_chunks": [], "sources": []
-                }
-                
-        elif intent == 'cortesia' and confidence > 0.5:
-            emoji = random.choice(greeting_emojis)
-            return {
-                "query": query_original,
-                "response": f"{emoji} ¡Estoy muy bien, gracias por preguntar! ¿En qué puedo ayudarte hoy con información sobre la Facultad de Medicina?",
-                "query_type": "cortesia",
-                "relevant_chunks": [], "sources": []
-            }
-            
-        elif intent == 'agradecimiento' and confidence > 0.5:
-            emoji = random.choice(success_emojis)
-            return {
-                "query": query_original,
-                "response": f"{emoji} ¡De nada! Estoy para ayudarte. Si necesitas algo más, no dudes en preguntar.",
-                "query_type": "agradecimiento",
-                "relevant_chunks": [], "sources": []
-            }
-            
-        elif intent == 'consulta_medica' and confidence > 0.5:
-            emoji = random.choice(warning_emojis)
-            return {
-                "query": query_original,
-                "response": f"{emoji} Lo siento, no puedo responder consultas médicas. Te recomiendo dirigirte a un profesional de la salud o al servicio médico de la facultad para recibir atención adecuada.",
-                "query_type": "consulta_medica",
-                "relevant_chunks": [], "sources": []
-            }
+        # Delegar manejo de intenciones conversacionales al intent handler
+        conversational = handle_conversational_intent(
+            intent, confidence, query_original, user_name
+        )
+        if conversational:
+            return conversational
             
         # Para consultas con baja confianza, no preguntar directamente sino tratar de responder
         # con el sistema RAG normal, dejando que el modelo interprete directamente

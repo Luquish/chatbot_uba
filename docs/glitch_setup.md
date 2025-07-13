@@ -141,7 +141,7 @@ Si estás desarrollando localmente, necesitas exponer tu servidor para que Glitc
 
 ## Paso 7: Probar la configuración
 
-1. Inicia tu backend: `python scripts/deploy_backend.py`
+1. Inicia tu backend: `uvicorn main:app`
 2. Envía un mensaje desde WhatsApp al número de teléfono configurado
 3. Verifica los logs en Glitch y en tu backend
 
