@@ -59,42 +59,67 @@ class OpenAIModel(BaseModel):
 
 
 class OpenAIEmbedding:
-    """
-    Clase para usar el servicio de embeddings de OpenAI.
-    """
-    
+    """Servicio de generación de embeddings usando OpenAI."""
+
     def __init__(self, model_name: str, api_key: str, timeout: int = API_TIMEOUT):
-        """
-        Inicializa el cliente para OpenAI.
-        
+        """Inicializa el cliente de OpenAI para embeddings.
+
         Args:
-            model_name (str): Nombre del modelo de embeddings
-            api_key (str): API key de OpenAI
-            timeout (int): Timeout para las llamadas a la API
+            model_name (str): Nombre del modelo (p.ej. ``text-embedding-3-small``).
+            api_key (str): API key de OpenAI.
+            timeout (int): Tiempo máximo de espera para las llamadas a la API.
         """
         self.model_name = model_name
-        self.client = openai.OpenAI(api_key=api_key, timeout=timeout)
-        
-    def encode(self, texts: List[str]) -> List[List[float]]:
-        """
-        Genera embeddings para una lista de textos.
-        
+        self.api_key = api_key
+        self.timeout = timeout
+
+        # Configurar cliente
+        openai.api_key = api_key
+
+        logger.info(f"Modelo de embeddings OpenAI inicializado: {model_name}")
+
+    def encode(self, texts: List[str], **kwargs) -> np.ndarray:
+        """Genera embeddings para una lista de textos.
+
         Args:
-            texts (List[str]): Lista de textos para convertir a embeddings
-            
+            texts (List[str]): Lista de textos a procesar.
+            **kwargs: Argumentos opcionales para el procesamiento.
+
         Returns:
-            List[List[float]]: Lista de embeddings vectoriales
+            np.ndarray: Matriz con los embeddings generados.
         """
+        convert_to_numpy = kwargs.get("convert_to_numpy", True)
+        normalize_embeddings = kwargs.get("normalize_embeddings", False)
+
         try:
-            # Procesar múltiples textos en batches si hay muchos
-            embeddings = []
-            for text in texts:
-                response = self.client.embeddings.create(
-                    model=self.model_name,
-                    input=[text]
-                )
-                embeddings.append(response.data[0].embedding)
-            return embeddings
+            response = openai.embeddings.create(
+                model=self.model_name,
+                input=texts,
+                encoding_format="float",
+                timeout=self.timeout,
+            )
+
+            embeddings = [item.embedding for item in response.data]
+            embeddings_array = np.array(embeddings, dtype=np.float32)
+
+            if normalize_embeddings:
+                norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+                embeddings_array = embeddings_array / norms
+
+            return embeddings_array if convert_to_numpy else embeddings
+
         except Exception as e:
-            logger.error(f"Error al generar embeddings con OpenAI: {str(e)}")
-            raise 
+            logger.error(
+                f"Error al generar embeddings con OpenAI ({self.model_name}): {str(e)}"
+            )
+            raise
+
+    def get_sentence_embedding_dimension(self) -> int:
+        """Retorna la dimensión de los embeddings del modelo."""
+
+        if "small" in self.model_name:
+            return 1536
+        elif "large" in self.model_name:
+            return 3072
+        else:
+            return 1536
