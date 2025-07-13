@@ -1,29 +1,36 @@
-FROM python:3.11-slim
+# --- Stage 1: Build dependencies ---
+FROM python:3.11-slim AS builder
 
-# Establecer directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias del sistema
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Install build tools required for compiling Python packages
+RUN apt-get update && apt-get install -y build-essential
 
-# Copiar requisitos
+# Install Python dependencies
 COPY requirements-prod.txt .
+RUN pip install --no-cache-dir -r requirements-prod.txt
 
-# Copiar archivo principal a la raíz
+# --- Stage 2: Final image ---
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy installed dependencies from the builder stage
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application code
 COPY main.py .
 COPY rag_system.py .
 
-# Copiar scripts esenciales
+# Essential scripts
 COPY scripts/__init__.py scripts/
 COPY scripts/run_rag.py scripts/
 COPY scripts/gcs_storage.py scripts/
 COPY scripts/create_embeddings.py scripts/
 COPY scripts/preprocess.py scripts/
 
-
-# Copiar directorios de módulos
+# Module directories
 COPY config/ config/
 COPY services/ services/
 COPY models/ models/
@@ -31,15 +38,10 @@ COPY storage/ storage/
 COPY utils/ utils/
 COPY handlers/ handlers/
 
-# Instalar dependencias de Python
-RUN pip install --no-cache-dir -r requirements-prod.txt
-
-# Variables de entorno por defecto
+# Default environment variables
 ENV HOST=0.0.0.0
 ENV ENVIRONMENT=production
 
-# Exponer puerto
 EXPOSE 8080
 
-# Comando para ejecutar la aplicación
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
