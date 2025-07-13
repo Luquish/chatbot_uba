@@ -28,6 +28,7 @@ Este proyecto implementa un asistente virtual para cualquier facultad de la UBA 
 
 ```
 .
+├── main.py             # Backend FastAPI y webhook de WhatsApp
 ├── rag_system.py           # Clase principal del sistema RAG
 ├── data/
 │   ├── raw/                # Documentos PDF sin procesar
@@ -44,8 +45,8 @@ Este proyecto implementa un asistente virtual para cualquier facultad de la UBA 
 │   ├── preprocess.py       # Procesamiento de documentos PDF con Marker
 │   ├── create_embeddings.py # Generación de embeddings con OpenAI
 │   ├── run_rag.py          # Script de ejecución de consola para el sistema RAG
-│   ├── main.py             # Backend FastAPI y webhook de WhatsApp
-│   └── train_finetune.py   # Fine-tuning de modelos con OpenAI
+│   ├── deploy_backend.py   # Despliegue simplificado en Cloud Run
+│   └── gcs_storage.py      # Utilidades para Google Cloud Storage
 ├── handlers/               # Manejadores de intenciones y servicios específicos
 │   ├── intent_handler.py   # Manejo de intenciones de usuario
 │   ├── courses_handler.py  # Manejador de consultas sobre cursos
@@ -111,9 +112,10 @@ WHATSAPP_PHONE_NUMBER_ID=                        # ID del número de teléfono e
 WHATSAPP_BUSINESS_ACCOUNT_ID=                    # ID de la cuenta de negocio
 WHATSAPP_WEBHOOK_VERIFY_TOKEN=                   # Token para verificar webhooks
 
-# URL del backend para recibir mensajes de Glitch
-BACKEND_URL=http://localhost:8000/api/whatsapp/message  # URL para webhooks
+# URL del backend para redirección de webhooks (opcional, solo en desarrollo)
+BACKEND_URL=http://localhost:8000/api/whatsapp/message
 
+ENVIRONMENT=development  # "production" para despliegues en Cloud Run
 # Configuración del servidor
 HOST=0.0.0.0                                     # Host para el servidor FastAPI
 PORT=8000                                        # Puerto para el servidor FastAPI
@@ -165,6 +167,9 @@ Este script:
 - Crea y guarda el índice FAISS
 - Almacena metadatos necesarios
 
+En producción los webhooks de WhatsApp se envían directamente al servidor.
+Si defines `ENVIRONMENT=production`, el middleware integrado verificará el webhook sin usar Glitch.
+Para desarrollo puedes exponer tu servidor con ngrok o seguir las instrucciones opcionales en `docs/glitch_setup.md`.
 3. **Ejecución Local:**
 ```bash
 uvicorn main:app --reload
@@ -185,16 +190,20 @@ El proyecto está configurado para ser desplegado usando Docker, separando el pr
 
 #### Archivos en Producción
 
-Solo los archivos necesarios para la ejecución se incluyen en el contenedor:
+Solo los archivos y directorios necesarios para la ejecución se incluyen en la imagen:
 - `main.py`
-- `scripts/run_rag.py`
-- `scripts/calendar_service.py`
-- `scripts/date_utils.py`
-- `scripts/gcs_storage.py`
+- `rag_system.py`
 - `scripts/__init__.py`
-- `data/embeddings/`
-- `config/calendar_config.py`
-
+- `scripts/run_rag.py`
+- `scripts/gcs_storage.py`
+- `scripts/create_embeddings.py`
+- `scripts/preprocess.py`
+- `config/`
+- `services/`
+- `models/`
+- `storage/`
+- `utils/`
+- `handlers/`
 #### Comandos Docker
 
 1. **Construir la imagen:**
