@@ -1,9 +1,5 @@
 import os
-import sys
 from dotenv import load_dotenv
-
-# Añadir el directorio raíz al path para poder importar rag_system
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rag_system import RAGSystem
 
 """

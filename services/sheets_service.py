@@ -8,11 +8,7 @@ import logging
 from typing import List, Dict, Optional, Any
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-import sys
 from datetime import datetime, timedelta
-
-# Añadir el directorio raíz al path de Python
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
