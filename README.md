@@ -1,449 +1,461 @@
-# Chatbot Educativo UBA - Facultad de Medicina
+# Chatbot Administrativo UBA
 
-Este proyecto implementa un chatbot educativo para la Facultad de Medicina de la Universidad de Buenos Aires (UBA), diseñado para asistir a aproximadamente 127.000 estudiantes con consultas administrativas.
+Un sistema de chatbot administrativo para la Universidad de Buenos Aires (UBA) basado en tecnología RAG (Retrieval Augmented Generation) e integración con WhatsApp. El sistema proporciona respuestas precisas y contextuales a consultas administrativas utilizando documentos institucionales.
 
-## Características Principales
+## Descripción General
 
-- **Modelo Base**: Utiliza Mistral 7B o Gemma 7B como modelo base
-- **Fine-tuning**: Implementa LoRA/QLoRA para adaptación específica
-- **RAG**: Sistema de recuperación aumentada de información
-- **Integración WhatsApp**: Compatible con Twilio y API oficial de WhatsApp
-- **Backend**: API REST con FastAPI
-- **Almacenamiento Dual**: FAISS local para desarrollo, Pinecone para producción
+Este proyecto implementa un asistente virtual para cualquier facultad de la UBA que responde consultas administrativas a través de WhatsApp. El sistema utiliza técnicas avanzadas de procesamiento de lenguaje natural:
 
-## Guía Paso a Paso de Implementación
+### Características Principales
 
-Sigue estos pasos en orden para configurar completamente el proyecto:
+- **Procesamiento de Documentos**: Extrae y procesa texto de documentos PDF utilizando Marker PDF, preservando la estructura y generando chunks optimizados para RAG.
+- **Sistema de Embeddings**: Utiliza OpenAI (text-embedding-3-small) para generar embeddings de alta calidad y almacenarlos en índices FAISS.
+- **Motor RAG**: Sistema de Generación Aumentada por Recuperación que combina recuperación de información y generación de respuestas contextuales.
+- **Integración WhatsApp**: Conexión directa con la API de WhatsApp Business para enviar y recibir mensajes.
+- **Sistema de Intenciones**: Clasificación semántica de consultas para personalizar las respuestas según el tipo de pregunta.
+- **Fine-tuning de Modelos**: Capacidad de fine-tuning mediante OpenAI para adaptar el modelo a interacciones específicas.
 
-### 1. Configuración del Entorno
+### Flujo del Sistema
 
-```bash
-# Crear y activar entorno virtual
-python -m venv venv
-source venv/bin/activate  # En Unix/macOS
-# o
-.\venv\Scripts\activate  # En Windows
-# o con conda
-conda create -n chatbots_uba python=3.9 -y
-conda activate chatbots_uba
-
-# Instalar dependencias
-pip install -r requirements.txt
-
-# Configurar variables de entorno
-cp .env.example .env
-# Editar .env con tus credenciales
-```
-
-### 2. Preparación de Datos
-
-```bash
-# Colocar tus documentos PDF en la carpeta data/raw
-mkdir -p data/raw
-# [Agrega aquí tus PDFs]
-
-# Preprocesar documentos
-python scripts/preprocess.py
-```
-
-Este paso:
-- Extrae texto de documentos PDF
-- Limpia y normaliza el texto
-- Divide el texto en fragmentos (chunks) manejables
-- Guarda los resultados en `data/processed/`
-
-### 3. Generación de Embeddings
-
-```bash
-# Crear embeddings para los documentos procesados
-python scripts/create_embeddings.py
-```
-
-Este paso:
-- Genera embeddings vectoriales para cada fragmento de texto
-- En modo desarrollo: almacena los embeddings en un índice FAISS local
-- En modo producción: almacena los embeddings en Pinecone
-- Los índices locales se guardan en `data/embeddings/`
-
-### 4. Fine-tuning del Modelo (Opcional)
-
-```bash
-# Fine-tunear el modelo base para adaptarlo al dominio
-python scripts/train_finetune.py
-```
-
-Este paso:
-- Aplica técnicas de LoRA/QLoRA para adaptar el modelo base
-- El modelo resultante se guarda en `models/finetuned_model/`
-- Puede tardar varias horas dependiendo del hardware disponible
-
-### 5. Configuración de WhatsApp
-
-#### Para desarrollo (Twilio):
-
-1. Crear una cuenta en [Twilio](https://www.twilio.com/)
-2. Activar el sandbox de WhatsApp en Twilio
-3. En el panel de Twilio, busca la sección "WhatsApp Sandbox"
-4. Envía el mensaje de unión (ejemplo: "join chicken-firm") desde tu WhatsApp al número de Twilio
-5. Configura las variables de Twilio en `.env`:
-   ```
-   ENVIRONMENT=development
-   TWILIO_ACCOUNT_SID=your_account_sid
-   TWILIO_AUTH_TOKEN=your_auth_token
-   TWILIO_PHONE_NUMBER=your_phone_number
-   MY_PHONE_NUMBER=your_whatsapp_number
-   ```
-
-#### Para producción (API oficial):
-
-1. Configura la API oficial de WhatsApp Business en `.env`:
-   ```
-   ENVIRONMENT=production
-   WHATSAPP_API_TOKEN=your_api_token
-   WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
-   WHATSAPP_BUSINESS_ACCOUNT_ID=your_business_account_id
-   ```
-
-### 6. Iniciar el Servidor
-
-```bash
-# Iniciar el servidor de desarrollo
-python scripts/deploy_backend.py
-```
-
-### 7. Configurar Webhook con ngrok
-
-```bash
-# Instalar ngrok si no lo tienes
-# Exponer el servidor local a internet
-ngrok http 8000
-```
-
-Después:
-1. Copia la URL generada por ngrok (ej: https://abc123.ngrok.io)
-2. En el panel de Twilio, en la sección "WhatsApp Sandbox"
-3. Configura la URL de webhook como:
-   ```
-   https://tu-url-ngrok.io/webhook/whatsapp
-   ```
-4. Selecciona el método HTTP como "POST"
-5. Guarda los cambios
-
-### 8. Probar el Chatbot
-
-```bash
-# Enviar un mensaje de prueba
-# Visita en tu navegador
-http://localhost:8000/test-message
-```
-
-o envía un mensaje desde tu WhatsApp al número de Twilio.
-
-## Sistema RAG y Prompt del LLM
-
-El proyecto utiliza un sistema RAG (Retrieval-Augmented Generation) que:
-
-1. Recibe una consulta del usuario
-2. Recupera los fragmentos más relevantes de la información almacenada
-3. Construye un prompt con el contexto recuperado
-4. Genera una respuesta usando el modelo fine-tuneado
-
-### Prompt Utilizado
-
-El prompt usado para generar respuestas tiene esta estructura:
-
-```
-Contexto:
-[Aquí se insertan los fragmentos de documentos relevantes]
-
-Pregunta: [Consulta del usuario]
-
-Respuesta:
-```
-
-Este prompt se encuentra en el archivo `scripts/run_rag.py`, método `generate_response()`.
+1. El estudiante envía una consulta por WhatsApp
+2. El backend de FastAPI recibe el mensaje a través de un webhook
+3. El sistema RAG analiza la consulta e identifica la intención
+4. Se recupera información relevante desde la base de conocimientos
+5. Se genera una respuesta utilizando la información contextual y la consulta
+6. La respuesta se envía de vuelta al estudiante a través de WhatsApp
 
 ## Estructura del Proyecto
 
 ```
-project/
+.
+├── rag_system.py           # Clase principal del sistema RAG
 ├── data/
-│   ├── raw/                # PDFs y documentos sin procesar
-│   ├── processed/          # Datos preprocesados
-│   ├── embeddings/         # Índices de embeddings (FAISS local)
-│   └── finetuning/         # Dataset para fine-tuning
-├── models/
-│   ├── base_model/         # Modelo base
-│   └── finetuned_model/    # Modelo fine-tuneado
+│   ├── raw/                # Documentos PDF sin procesar
+│   ├── processed/          # Documentos procesados en formato markdown
+│   ├── embeddings/         # Embeddings e índices FAISS generados
+│   └── finetuning/         # Datos para fine-tuning del modelo
+├── models/                 # Modelos de IA y clases base
+│   ├── base_model.py       # Clase base para modelos de LLM
+│   ├── openai_model.py     # Implementación para modelos de OpenAI
+│   └── finetuned_model/    # Modelos fine-tuneados
+├── storage/                # Gestión de almacenamiento vectorial
+│   └── vector_store.py     # Implementación de FAISS Vector Store
 ├── scripts/
-│   ├── preprocess.py       # Preprocesamiento de documentos
-│   ├── create_embeddings.py# Generación de embeddings
-│   ├── train_finetune.py   # Fine-tuning del modelo
-│   ├── run_rag.py          # Sistema RAG
-│   └── deploy_backend.py   # Backend y API
-└── notebooks/              # Experimentación y análisis
+│   ├── preprocess.py       # Procesamiento de documentos PDF con Marker
+│   ├── create_embeddings.py # Generación de embeddings con OpenAI
+│   ├── run_rag.py          # Script de ejecución de consola para el sistema RAG
+│   ├── main.py             # Backend FastAPI y webhook de WhatsApp
+│   └── train_finetune.py   # Fine-tuning de modelos con OpenAI
+├── handlers/               # Manejadores de intenciones y servicios específicos
+│   ├── intent_handler.py   # Manejo de intenciones de usuario
+│   ├── courses_handler.py  # Manejador de consultas sobre cursos
+│   └── calendar_handler.py # Manejador de eventos de calendario
+├── services/               # Servicios externos integrados
+│   ├── calendar_service.py # Integración con Google Calendar
+│   └── sheets_service.py   # Integración con Google Sheets
+├── utils/                  # Utilidades del sistema
+│   └── date_utils.py       # Utilidades para manejo de fechas
+├── config/                 # Archivos de configuración
+│   ├── settings.py         # Configuraciones generales del sistema
+│   ├── constants.py        # Constantes del sistema
+│   └── calendar_config.py  # Configuración de servicios de calendario
+├── logs/                   # Archivos de registro
+├── docs/                   # Documentación del proyecto
+├── Dockerfile              # Configuración para Docker
+└── docker-compose.yml      # Configuración de servicios Docker
 ```
+
+## Configuración
+
+1. Clona el repositorio:
+```bash
+git clone https://github.com/yourusername/chatbot_uba.git
+cd chatbot_uba
+```
+
+2. Crea y activa un entorno virtual:
+   (Opcional pero recomendado)
+```bash
+python -m venv venv
+source venv/bin/activate  # En Windows usa: venv\Scripts\activate
+```
+
+3. Instala las dependencias:
+```bash
+pip install -r requirements.txt
+```
+
+4. Crea un archivo `.env` basado en el template `.env.example`:
+```bash
+cp .env.example .env
+```
+
+5. Configura las variables de entorno en el archivo `.env`:
+
+### Variables de Entorno Principales
+
+```
+# Configuración de Usuario para Pruebas
+MY_PHONE_NUMBER=                                 # (opcional) Tu número para pruebas
+
+# Configuración de Google Calendar API
+CALENDAR_ID_EXAMENES=                            # ID del calendario de exámenes
+CALENDAR_ID_INSCRIPCIONES=                       # ID del calendario de inscripciones
+CALENDAR_ID_CURSADA=                             # ID del calendario de cursada
+CALENDAR_ID_TRAMITES=                            # ID del calendario de trámites
+GOOGLE_API_KEY=                         # API Key de Google Calendar
+
+# Configuración de WhatsApp Business API
+WHATSAPP_API_TOKEN=                              # Token de la API de WhatsApp
+WHATSAPP_PHONE_NUMBER_ID=                        # ID del número de teléfono en WhatsApp Business
+WHATSAPP_BUSINESS_ACCOUNT_ID=                    # ID de la cuenta de negocio
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=                   # Token para verificar webhooks
+
+# URL del backend para recibir mensajes de Glitch
+BACKEND_URL=http://localhost:8000/api/whatsapp/message  # URL para webhooks
+
+# Configuración del servidor
+HOST=0.0.0.0                                     # Host para el servidor FastAPI
+PORT=8000                                        # Puerto para el servidor FastAPI
+
+# Directorios de datos
+EMBEDDINGS_DIR=data/embeddings                   # Directorio para embeddings
+
+# Configuración de modelos de OpenAI
+OPENAI_API_KEY=                                  # API Key de OpenAI
+PRIMARY_MODEL=gpt-4o-mini                        # Modelo principal de OpenAI
+FALLBACK_MODEL=gpt-4.1-nano                      # Modelo de respaldo si falla el principal
+EMBEDDING_MODEL=text-embedding-3-small           # Modelo para embeddings
+
+# Parámetros de generación
+TEMPERATURE=0.7                                  # Temperatura para generación
+TOP_P=0.9                                        # Parámetro top_p para generación
+TOP_K=50                                         # Parámetro top_k para generación
+MAX_OUTPUT_TOKENS=300                            # Máxima longitud de salida
+
+# Configuración de RAG
+RAG_NUM_CHUNKS=3                                 # Número de chunks a recuperar
+SIMILARITY_THRESHOLD=0.3                         # Umbral de similitud mínima
+
+# Configuración del dispositivo (auto, cuda, cpu, mps)
+DEVICE=mps                                       # auto, cuda, cpu, o mps para Mac
+
+# Configuración del entorno
+API_TIMEOUT=30                                   # Timeout para llamadas a APIs externas (segundos)
+```
+
+## Flujo de Trabajo
+
+### Desarrollo Local
+1. **Procesamiento de Documentos:**
+```bash
+python scripts/preprocess.py
+```
+Este script:
+- Procesa los PDFs en `data/raw/`
+- Genera chunks optimizados
+- Guarda los resultados en `data/processed/`
+
+2. **Generación de Embeddings:**
+```bash
+python scripts/create_embeddings.py
+```
+Este script:
+- Genera embeddings usando OpenAI
+- Crea y guarda el índice FAISS
+- Almacena metadatos necesarios
+
+3. **Ejecución Local:**
+```bash
+uvicorn main:app --reload
+```
+
+### Despliegue con Docker
+
+El proyecto está configurado para ser desplegado usando Docker, separando el procesamiento de documentos (local) de la ejecución del servidor (producción).
+
+#### Estructura Docker
+
+```
+.
+├── Dockerfile           # Configuración de la imagen
+├── docker-compose.yml   # Configuración del servicio
+└── .dockerignore        # Archivos excluidos del contenedor
+```
+
+#### Archivos en Producción
+
+Solo los archivos necesarios para la ejecución se incluyen en el contenedor:
+- `main.py`
+- `scripts/run_rag.py`
+- `scripts/calendar_service.py`
+- `scripts/date_utils.py`
+- `scripts/gcs_storage.py`
+- `scripts/__init__.py`
+- `data/embeddings/`
+- `config/calendar_config.py`
+
+#### Comandos Docker
+
+1. **Construir la imagen:**
+```bash
+docker-compose build
+```
+
+2. **Iniciar el contenedor:**
+```bash
+docker-compose up -d
+```
+
+3. **Ver logs:**
+```bash
+docker-compose logs -f
+```
+
+4. **Detener el contenedor:**
+```bash
+docker-compose down
+```
+
+#### Ejecución directa con Docker
+
+Para ejecutar el contenedor Docker directamente con todas las configuraciones necesarias:
+
+```bash
+docker run -p 8000:8000 \
+  -v $(pwd)/data/embeddings:/app/data/embeddings \
+  -e PORT=8000 \
+  -e OPENAI_API_KEY=your_openai_key \
+  -e WHATSAPP_API_TOKEN=your_whatsapp_token \
+  -e WHATSAPP_PHONE_NUMBER_ID=your_whatsapp_phone_id \
+  -e WHATSAPP_BUSINESS_ACCOUNT_ID=your_whatsapp_business_id \
+  -e WHATSAPP_WEBHOOK_VERIFY_TOKEN=your_webhook_token \
+  uba-chatbot
+```
+
+**Parámetros importantes**:
+- Montar embeddings: `-v $(pwd)/data/embeddings:/app/data/embeddings`
+- Especificar el puerto: `-e PORT=8000`
+- Usar IDs correctos para WhatsApp (el PHONE_NUMBER_ID es un ID numérico asignado por Meta, no el número de teléfono real)
+
+### Flujo de Actualización de Documentos
+
+1. Añadir nuevos PDFs en `data/raw/`
+2. Ejecutar localmente el preprocesamiento:
+   ```bash
+   python scripts/preprocess.py
+   python scripts/create_embeddings.py
+   ```
+3. Los nuevos embeddings se generarán en `data/embeddings/`
+4. El contenedor Docker montará automáticamente los nuevos embeddings
+
+## Despliegue en Google Cloud Run
+
+El proyecto está diseñado para ser desplegado en Google Cloud Run, utilizando Google Cloud Storage (GCS) para almacenar los embeddings en producción.
+
+### Configuración inicial en Google Cloud
+
+1. **Autenticar y configurar el proyecto**:
+```bash
+# Iniciar sesión en Google Cloud
+gcloud auth login
+
+# Establecer el proyecto activo
+gcloud config set project [PROJECT_ID]
+
+# Activar las APIs necesarias
+gcloud services enable artifactregistry.googleapis.com run.googleapis.com storage-api.googleapis.com secretmanager.googleapis.com
+```
+
+2. **Crear bucket y subir embeddings**:
+```bash
+# Crear bucket en la misma región que usará Cloud Run (por ejemplo, us-central1 o southamerica-east1)
+gsutil mb -l [REGION] gs://[BUCKET_NAME]
+
+# Subir embeddings usando gcloud storage
+gcloud storage cp --recursive data/embeddings/* gs://[BUCKET_NAME]/
+
+# Verificar archivos subidos
+gcloud storage ls gs://[BUCKET_NAME]/
+```
+
+3. **Crear cuenta de servicio para el chatbot**:
+```bash
+# Crear una service account específica para el chatbot
+gcloud iam service-accounts create chatbot-serviceaccount \
+    --display-name="Chatbot Service Account"
+
+# Verificar que se creó correctamente
+gcloud iam service-accounts list
+```
+
+4. **Crear secretos para credenciales**:
+```bash
+# OpenAI
+echo -n "your_openai_api_key" | gcloud secrets create openai-credentials --data-file=- --replication-policy="automatic"
+
+# WhatsApp (secretos individuales)
+echo -n "your_whatsapp_api_token" | gcloud secrets create whatsapp-credentials --data-file=- --replication-policy="automatic"
+echo -n "your_phone_number_id" | gcloud secrets create whatsapp-phone-number-id --data-file=- --replication-policy="automatic"
+echo -n "your_business_account_id" | gcloud secrets create whatsapp-business-account-id --data-file=- --replication-policy="automatic"
+echo -n "your_webhook_verify_token" | gcloud secrets create whatsapp-webhook-verify-token --data-file=- --replication-policy="automatic"
+```
+
+5. **Otorgar permisos necesarios**:
+```bash
+# Usar la cuenta de servicio que creamos
+SERVICE_ACCOUNT="chatbot-serviceaccount@[PROJECT_ID].iam.gserviceaccount.com"
+
+# Permitir a Cloud Run acceder a los secretos
+gcloud secrets add-iam-policy-binding openai-credentials \
+    --member="serviceAccount:$SERVICE_ACCOUNT" \
+    --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding whatsapp-credentials \
+    --member="serviceAccount:$SERVICE_ACCOUNT" \
+    --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding whatsapp-phone-number-id \
+    --member="serviceAccount:$SERVICE_ACCOUNT" \
+    --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding whatsapp-business-account-id \
+    --member="serviceAccount:$SERVICE_ACCOUNT" \
+    --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding whatsapp-webhook-verify-token \
+    --member="serviceAccount:$SERVICE_ACCOUNT" \
+    --role="roles/secretmanager.secretAccessor"
+
+# Permitir a Cloud Run acceder al bucket de GCS
+gsutil iam ch serviceAccount:$SERVICE_ACCOUNT:objectViewer gs://[BUCKET_NAME]
+```
+
+### Adaptaciones para Google Cloud Storage
+
+El código ha sido adaptado para detectar automáticamente si se está ejecutando en un entorno local o en Cloud Run:
+
+- En entorno local: lee los embeddings desde el sistema de archivos local (`data/embeddings/`)
+- En Cloud Run: lee los embeddings desde el bucket de GCS configurado en la variable de entorno `GCS_BUCKET_NAME`
+
+Esta adaptación está implementada en el módulo `scripts/gcs_storage.py`, que proporciona funciones para:
+- Listar archivos en un bucket de GCS
+- Descargar archivos de GCS a una ubicación local temporal
+- Leer archivos como strings o datos binarios directamente desde GCS
+- Cargar índices FAISS y sus metadatos desde GCS
+
+### Despliegue paso a paso en Google Cloud Run
+
+1. **Verificar el archivo Dockerfile**:
+   Asegúrate de que el Dockerfile incluya todos los archivos necesarios, especialmente `scripts/__init__.py`:
+   ```dockerfile
+   # Copiar solo los archivos necesarios para producción
+   COPY requirements-prod.txt .
+   COPY main.py .
+   COPY scripts/run_rag.py scripts/
+   COPY scripts/calendar_service.py scripts/
+   COPY scripts/date_utils.py scripts/
+   COPY scripts/gcs_storage.py scripts/
+   COPY scripts/__init__.py scripts/
+   COPY config/calendar_config.py config/
+   ```
+
+2. **Construir imagen Docker para arquitectura amd64** (necesario para Cloud Run):
+   ```bash
+   docker buildx build --platform linux/amd64 -t uba-chatbot:latest .
+   docker tag uba-chatbot:latest gcr.io/[PROJECT_ID]/uba-chatbot:latest
+   ```
+
+3. **Autenticar Docker con Google Cloud y subir imagen**:
+   ```bash
+   gcloud auth configure-docker
+   docker push gcr.io/[PROJECT_ID]/uba-chatbot:latest
+   ```
+
+4. **Crear archivo cloud-run.yaml** basado en el ejemplo:
+   ```bash
+   cp cloud-run.yaml.example cloud-run.yaml
+   # Editar cloud-run.yaml para reemplazar los placeholders con tus valores reales
+   ```
+
+5. **Configurar anotaciones importantes en cloud-run.yaml**:
+   ```yaml
+   run.googleapis.com/startup-probe-failure-threshold: "5"
+   ```
+   Esta anotación es crucial para dar más tiempo al contenedor para inicializarse, especialmente cuando carga embeddings desde GCS.
+
+6. **Desplegar en Cloud Run**:
+   ```bash
+   gcloud run services replace cloud-run.yaml --region=[REGION]
+   ```
+
+7. **Permitir acceso público** (necesario para webhooks de WhatsApp):
+   ```bash
+   gcloud run services add-iam-policy-binding [SERVICE_NAME] \
+     --member="allUsers" \
+     --role="roles/run.invoker" \
+     --region=[REGION]
+   ```
+
+8. **Verificar el despliegue**:
+   ```bash
+   # Obtener URL del servicio
+   gcloud run services describe [SERVICE_NAME] --region=[REGION] --format="value(status.url)"
+   
+   # Verificar el estado del servicio
+   curl -v [SERVICE_URL]/health
+   
+   # Probar el webhook de WhatsApp (con el token real)
+   curl -v "[SERVICE_URL]/webhook/whatsapp?hub.mode=subscribe&hub.challenge=12345&hub.verify_token=[YOUR_VERIFY_TOKEN]"
+   
+   # Enviar un mensaje de prueba
+   curl -v [SERVICE_URL]/test-webhook
+   ```
+
+9. **Configurar en WhatsApp Business**:
+   1. Ve al [Facebook Developer Portal](https://developers.facebook.com/)
+   2. Selecciona tu app de WhatsApp Business
+   3. Navega a "WhatsApp" > "API Setup" > "Configuration"
+   4. En "Webhook", configura:
+      - **Callback URL**: `[SERVICE_URL]/webhook/whatsapp`
+      - **Verify Token**: El token configurado en `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+   5. Selecciona los eventos: `messages`, `message_deliveries`, `message_reads`
+   6. Haz clic en "Verify and Save"
+
+### Consideraciones importantes para el despliegue
+
+1. **Tiempo de inicio**: El contenedor necesita tiempo para inicializarse correctamente, especialmente al cargar embeddings desde GCS. La anotación `startup-probe-failure-threshold: "5"` ayuda a extender este tiempo.
+
+2. **Puerto de escucha**: Cloud Run proporciona automáticamente una variable de entorno `PORT` que debe ser utilizada por la aplicación. No intentes establecer esta variable manualmente en `cloud-run.yaml`, ya que es reservada del sistema.
+
+3. **Errores comunes**:
+   - Si el script no encuentra los embeddings, verifica que el bucket GCS esté correctamente configurado y que los archivos estén presentes.
+   - Si la carga desde GCS falla, asegúrate de que `scripts/__init__.py` esté incluido en el Dockerfile para permitir importaciones correctas.
+
+4. **Monitoreo de logs**:
+   ```bash
+   # Ver logs en tiempo real
+   gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=[SERVICE_NAME]" --limit=50
+   ```
+
+### Monitoreo y Mantenimiento
+
+- Los logs se encuentran en la carpeta `logs/`
+- El healthcheck verifica el servicio cada 30 segundos
+- El contenedor se reinicia automáticamente en caso de fallo
 
 ## Requisitos
 
 - Python 3.9+
-- CUDA compatible GPU (para fine-tuning o producción con NVIDIA)
-- 16GB+ RAM
-- Para desarrollo en Mac:
-  - Apple Silicon (M1/M2/M3/M4)
-  - MLX y mlx-lm (optimización para Apple Silicon)
-- Para producción:
-  - bitsandbytes (cuantización para servidores)
-  - torch >= 2.0
-- Dependencias principales (ver requirements.txt para la lista completa):
-  ```
-  transformers>=4.36.0
-  torch>=2.0.0
-  sentence-transformers>=2.2.2
-  faiss-cpu>=1.7.4  # o faiss-gpu
-  pinecone-client>=2.2.2  # para producción
-  fastapi>=0.104.1
-  uvicorn>=0.24.0
-  python-dotenv>=1.0.0
-  ```
+- Marker PDF para procesamiento de documentos
+- Cuenta de OpenAI con API key
+- Cuenta de WhatsApp Business
+- ngrok para desarrollo local
 
-## Configuración de Base de Datos Vectorial
+## Dependencias Principales
 
-El sistema está diseñado para funcionar con diferentes bases de datos vectoriales según el entorno:
-
-### 1. Desarrollo (FAISS local)
-
-- En desarrollo, los embeddings se almacenan localmente usando FAISS
-- Ubicación: `data/embeddings/faiss_index.bin`
-- Adecuado para pruebas y desarrollo
-- No requiere servicios externos
-
-### 2. Producción (Pinecone)
-
-- En producción, los embeddings se almacenan en Pinecone (base de datos vectorial en la nube)
-- Ventajas:
-  - Alta disponibilidad
-  - Escalabilidad
-  - Búsqueda vectorial optimizada
-  - Sin necesidad de almacenamiento local
-
-Para configurar Pinecone:
-
-1. Crear una cuenta en [Pinecone](https://www.pinecone.io/)
-2. Crear un índice coseno con la dimensión adecuada (384 para el modelo de embedding predeterminado)
-3. Configurar las variables en `.env`:
-   ```
-   ENVIRONMENT=production  # Activa el uso de Pinecone
-   PINECONE_API_KEY=your_api_key
-   PINECONE_ENVIRONMENT=your_pinecone_environment
-   PINECONE_INDEX_NAME=uba-chatbot-embeddings
-   ```
-
-### 3. Migración de datos
-
-Para transferir embeddings de desarrollo a producción:
-1. Configure el entorno de producción en `.env`
-2. Ejecute nuevamente `python scripts/create_embeddings.py`
-3. Sus embeddings se cargarán automáticamente en Pinecone
-
-## Configuración de WhatsApp
-
-El sistema está diseñado para funcionar con dos proveedores de WhatsApp, seleccionados automáticamente según el entorno:
-
-### 1. Configuración de entorno
-
-En tu archivo `.env`, establece el entorno:
-```
-# Opciones: development, production
-ENVIRONMENT=development  # Usa Twilio para desarrollo
-# o
-ENVIRONMENT=production   # Usa API oficial de WhatsApp para producción
-```
-
-### 2. Desarrollo con Twilio
-
-Para desarrollo local con Twilio:
-
-1. Crear una cuenta en [Twilio](https://www.twilio.com/)
-2. Activar el sandbox de WhatsApp en Twilio
-3. Configurar las variables en `.env`:
-   ```
-   ENVIRONMENT=development
-   TWILIO_ACCOUNT_SID=your_account_sid
-   TWILIO_AUTH_TOKEN=your_auth_token
-   TWILIO_PHONE_NUMBER=your_phone_number
-   MY_PHONE_NUMBER=your_personal_whatsapp_number  # Con código de país
-   ```
-4. **Importante: Unirse al sandbox de Twilio**:
-   - En la consola de Twilio, busca la sección "WhatsApp Sandbox"
-   - Verás un código de unión (ejemplo: "join chicken-firm")
-   - Desde tu WhatsApp (el número configurado como MY_PHONE_NUMBER), envía este mensaje exacto al número de WhatsApp de Twilio
-   - Recibirás un mensaje de confirmación cuando estés conectado
-   - **Solo los números que se han unido al sandbox pueden recibir mensajes**
-
-5. Iniciar el servidor:
-   ```bash
-   python scripts/deploy_backend.py
-   ```
-6. Probar la conexión:
-   ```
-   # Abrir en navegador
-   http://localhost:8000/test-message
-   ```
-   Deberías recibir un mensaje en tu WhatsApp si todo está configurado correctamente.
-
-7. Para recibir mensajes externos, exponer el servidor:
-   ```bash
-   ngrok http 8000
-   ```
-8. Configurar el webhook en Twilio apuntando a:
-   ```
-   https://tu-url-ngrok.io/webhook/whatsapp
-   ```
-
-### 3. Producción con API oficial de WhatsApp
-
-Para entorno de producción:
-
-1. Crear una cuenta en [Facebook Business Manager](https://business.facebook.com/)
-2. Solicitar acceso a la API de WhatsApp Business
-3. Crear un número de teléfono en WhatsApp Business y obtener credenciales
-4. Configurar las variables en `.env`:
-   ```
-   ENVIRONMENT=production
-   WHATSAPP_API_TOKEN=your_api_token
-   WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
-   WHATSAPP_BUSINESS_ACCOUNT_ID=your_business_account_id
-   ```
-5. Desplegar el servidor en un entorno de producción
-6. Configurar el webhook de Meta apuntando a:
-   ```
-   https://tu-dominio.com/webhook/whatsapp
-   ```
-
-## Optimización de Modelos
-
-El sistema implementa una estrategia dual de optimización para maximizar el rendimiento en diferentes entornos:
-
-### 1. Desarrollo en Mac (Apple Silicon)
-
-Si estás usando un dispositivo Mac con chip Apple Silicon (M1, M2, M3, M4):
-
-- **MLX**: Framework de Apple optimizado para Apple Silicon
-- **Beneficios**:
-  - Rendimiento hasta 10x más rápido que PyTorch en Apple Silicon
-  - Menor consumo de memoria
-  - Aprovecha los Neural Engine específicos del chip
-  - Sin necesidad de cuantización manual
-
-Para activar MLX:
-```
-# En .env
-USE_MLX=True
-USE_8BIT=False
-USE_4BIT=False
-```
-
-Esta configuración automáticamente:
-- Detecta modelos Mistral y los carga usando MLX
-- Busca versiones optimizadas para MLX de otros modelos
-- Funciona sin cambios de código entre Mistral y otros modelos
-
-Requisitos:
-```bash
-pip install mlx mlx-lm
-```
-
-### 2. Producción en Servidores Cloud
-
-Para despliegue en servidores de producción (típicamente Linux con GPUs NVIDIA):
-
-- **bitsandbytes**: Biblioteca de cuantización de alta performance
-- **Beneficios**:
-  - Cuantización INT8 (8-bit): Reduce memoria en ~50% con mínima pérdida de calidad
-  - Cuantización INT4 (4-bit): Reduce memoria en ~75% con pérdida moderada
-  - Compatible con GPUs NVIDIA en servidores cloud
-  - Mayor throughput y capacidad de usuarios concurrentes
-
-Para activar bitsandbytes:
-```
-# En .env
-USE_MLX=False
-USE_8BIT=True   # Para cuantización de 8 bits
-# o
-USE_4BIT=True   # Para cuantización de 4 bits (más agresiva)
-```
-
-### Detección Automática
-
-El sistema detecta automáticamente:
-1. Si está en Apple Silicon (Mac) o en un servidor standard
-2. Si MLX está disponible
-3. El tipo de modelo que está cargando
-
-Y aplica la optimización adecuada sin cambios manuales. Esta estrategia dual permite:
-- Desarrollo eficiente y rápido en MacBooks con M1/M2/M3/M4
-- Despliegue económico y escalable en servidores de producción
-
-## Variables de entorno completas
-
-Crea un archivo `.env` con las siguientes variables:
-
-```
-# Configuración de entorno
-ENVIRONMENT=development  # Opciones: development, production
-
-# Configuración de Usuario para Pruebas
-MY_PHONE_NUMBER=your_personal_whatsapp_number
-
-# Configuración de Twilio (para desarrollo)
-TWILIO_ACCOUNT_SID=your_account_sid
-TWILIO_AUTH_TOKEN=your_auth_token
-TWILIO_PHONE_NUMBER=your_phone_number
-
-# Configuración de WhatsApp Business API oficial (para producción)
-WHATSAPP_API_TOKEN=your_api_token
-WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
-WHATSAPP_BUSINESS_ACCOUNT_ID=your_business_account_id
-
-# Configuración de almacenamiento vectorial (Pinecone)
-PINECONE_API_KEY=your_pinecone_api_key
-PINECONE_ENVIRONMENT=your_pinecone_environment
-PINECONE_INDEX_NAME=uba-chatbot-embeddings
-
-# Configuración del servidor
-HOST=0.0.0.0
-PORT=8000
-
-# Configuración del modelo
-MODEL_PATH=models/finetuned_model
-EMBEDDINGS_DIR=data/embeddings
-BASE_MODEL_NAME=mistralai/Mistral-7B-Instruct-v0.3
-FALLBACK_MODEL_NAME=google/gemma-2b
-
-# Configuración de Hugging Face
-HUGGING_FACE_HUB_TOKEN=your_huggingface_token
-
-# Configuración de optimización
-USE_MLX=True    # Habilitar MLX para Apple Silicon
-USE_8BIT=False  # Cuantización de 8-bit (para servidores)
-USE_4BIT=False  # Cuantización de 4-bit (para servidores)
-```
-
-## Contribución
-
-1. Fork el repositorio
-2. Crear una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abrir un Pull Request
-
-## Licencia
-
-Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para más detalles.
-
-## Contacto
-
-Tu Nombre - [@tutwitter](https://twitter.com/tutwitter) - email@example.com
-
-Link del Proyecto: [https://github.com/tu-usuario/chatbot_uba](https://github.com/tu-usuario/chatbot_uba)
+- FastAPI y Uvicorn para el backend
+- Transformers y PyTorch para modelos de NLP
+- FAISS para índices de vectores
+- OpenAI para embeddings y fine-tuning
+- Marker PDF para procesamiento de documentos

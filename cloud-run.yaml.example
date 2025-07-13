@@ -1,0 +1,99 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: uba-chatbot
+  annotations:
+    run.googleapis.com/mount-volumes-gcs-csi: enabled
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      serviceAccountName: chatbot-serviceaccount@[PROJECT_ID].iam.gserviceaccount.com
+      containers:
+      - image: gcr.io/[PROJECT_ID]/uba-chatbot:latest
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: HOST
+          value: "0.0.0.0"
+        - name: GCS_BUCKET_NAME
+          value: "uba-chatbot-embeddings"
+        - name: MY_PHONE_NUMBER
+          value: "+[PHONE_NUMBER]"  # Número para pruebas
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-credentials
+              key: latest
+        - name: WHATSAPP_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: whatsapp-credentials
+              key: latest
+        - name: WHATSAPP_PHONE_NUMBER_ID
+          valueFrom:
+            secretKeyRef:
+              name: whatsapp-phone-number-id
+              key: latest
+        - name: WHATSAPP_BUSINESS_ACCOUNT_ID
+          valueFrom:
+            secretKeyRef:
+              name: whatsapp-business-account-id
+              key: latest
+        - name: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: whatsapp-webhook-verify-token
+              key: latest
+        - name: CURSOS_SPREADSHEET_ID
+          valueFrom:
+            secretKeyRef:
+              name: cursos-spreadsheet-id
+              key: latest
+        # Google Calendar API configuration
+        - name: CALENDAR_ID_EXAMENES
+          valueFrom:
+            secretKeyRef:
+              name: calendar-id-examenes
+              key: latest
+        - name: CALENDAR_ID_INSCRIPCIONES
+          valueFrom:
+            secretKeyRef:
+              name: calendar-id-inscripciones
+              key: latest
+        - name: CALENDAR_ID_CURSADA
+          valueFrom:
+            secretKeyRef:
+              name: calendar-id-cursada
+              key: latest
+        - name: CALENDAR_ID_TRAMITES
+          valueFrom:
+            secretKeyRef:
+              name: calendar-id-tramites
+              key: latest
+        - name: GOOGLE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: google-calendar-api-key
+              key: latest
+        ports:
+        - containerPort: 8080
+          name: http1
+        resources:
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        volumeMounts:
+        - name: embeddings
+          mountPath: /app/data/embeddings
+          readOnly: true
+      volumes:
+      - name: embeddings
+        csi:
+          driver: gcs.csi.storage.gke.io
+          volumeAttributes:
+            bucket: uba-chatbot-embeddings 
