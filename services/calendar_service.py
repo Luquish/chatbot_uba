@@ -10,10 +10,6 @@ from typing import List, Dict, Optional
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import pytz
-import sys
-
-# Añadir el directorio raíz al path de Python
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.calendar_config import CALENDAR_CONFIG, CALENDARS
 from utils.date_utils import DateUtils

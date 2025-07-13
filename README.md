@@ -152,7 +152,7 @@ API_TIMEOUT=30                                   # Timeout para llamadas a APIs 
 ### Desarrollo Local
 1. **Procesamiento de Documentos:**
 ```bash
-python scripts/preprocess.py
+python -m scripts.preprocess
 ```
 Este script:
 - Procesa los PDFs en `data/raw/`
@@ -161,7 +161,7 @@ Este script:
 
 2. **Generación de Embeddings:**
 ```bash
-python scripts/create_embeddings.py
+python -m scripts.create_embeddings
 ```
 Este script:
 - Genera embeddings usando OpenAI
@@ -174,6 +174,11 @@ Para desarrollo puedes exponer tu servidor con ngrok o seguir las instrucciones 
 3. **Ejecución Local:**
 ```bash
 uvicorn main:app --reload
+```
+
+4. **Probar el sistema RAG por consola:**
+```bash
+python -m scripts.run_rag
 ```
 
 ### Despliegue con Docker
@@ -255,8 +260,8 @@ docker run -p 8000:8000 \
 1. Añadir nuevos PDFs en `data/raw/`
 2. Ejecutar localmente el preprocesamiento:
    ```bash
-   python scripts/preprocess.py
-   python scripts/create_embeddings.py
+   python -m scripts.preprocess
+   python -m scripts.create_embeddings
    ```
 3. Los nuevos embeddings se generarán en `data/embeddings/`
 4. El contenedor Docker montará automáticamente los nuevos embeddings
