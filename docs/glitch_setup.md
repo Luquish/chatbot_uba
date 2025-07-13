@@ -1,6 +1,6 @@
-# Configuración del Webhook de WhatsApp con Glitch
+# Configuración opcional del Webhook de WhatsApp con Glitch
 
-Este documento explica cómo configurar el webhook de WhatsApp usando Glitch.
+Este documento explica un método alternativo para redirigir los mensajes de WhatsApp a tu entorno local usando Glitch. Se recomienda únicamente para desarrollo cuando no puedes exponer tu servidor directamente (por ejemplo, con ngrok). En producción, el middleware de `main.py` permite recibir los webhooks de forma directa.
 
 ## Paso 1: Crear un proyecto en Glitch
 
