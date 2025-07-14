@@ -3,17 +3,10 @@ version: '3.8'
 services:
   chatbot:
     build: .
+    env_file:
+      - .env
     ports:
       - "8080:8080"
-    environment:
-      - ENVIRONMENT=production
-      - WHATSAPP_API_TOKEN=${WHATSAPP_API_TOKEN}
-      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
-      - WHATSAPP_BUSINESS_ACCOUNT_ID=${WHATSAPP_BUSINESS_ACCOUNT_ID}
-      - WHATSAPP_WEBHOOK_VERIFY_TOKEN=${WHATSAPP_WEBHOOK_VERIFY_TOKEN}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - CURSOS_SPREADSHEET_ID=${CURSOS_SPREADSHEET_ID}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
