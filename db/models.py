@@ -4,7 +4,7 @@ Adaptado desde drcecim_upload para uso en el sistema de RAG.
 """
 import logging
 from datetime import datetime
-from sqlalchemy import Table, Column, BigInteger, Text, DateTime, MetaData
+from sqlalchemy import Table, Column, BigInteger, Integer, String, Text, DateTime, MetaData
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import registry, declarative_base
 from pgvector.sqlalchemy import Vector

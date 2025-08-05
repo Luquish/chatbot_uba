@@ -23,10 +23,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY main.py .
 COPY rag_system.py .
 
-# Essential scripts (only GCS storage and RAG runner)
+# Essential scripts
 COPY scripts/__init__.py scripts/
-COPY scripts/run_rag.py scripts/
-COPY scripts/gcs_storage.py scripts/
 
 # Module directories
 COPY config/ config/

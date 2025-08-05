@@ -144,29 +144,38 @@ class VectorDBService:
             List[Dict[str, Any]]: Lista de resultados con similitud
         """
         try:
-            # Convertir embedding a lista para pgvector
-            embedding_list = query_embedding.tolist()
+            # Convertir embedding a formato correcto para pgvector
+            if isinstance(query_embedding, np.ndarray):
+                embedding_list = query_embedding.tolist()
+            else:
+                embedding_list = list(query_embedding)
             
-            # Construir query SQL
+            # Asegurar que sea una lista de números flotantes
+            embedding_list = [float(x) for x in embedding_list]
+            
+            # Convertir la lista a formato de cadena para pgvector: '[1,2,3]'
+            embedding_str = str(embedding_list)
+            
+            # Construir query SQL con formato correcto para pgvector
             if document_id:
                 sql = text("""
                     SELECT 
                         text_content,
                         document_id,
                         chunk_id,
-                        embedding_vector <-> :query_embedding as distance,
-                        1 - (embedding_vector <-> :query_embedding) as similarity
+                        embedding_vector <-> :embedding as distance,
+                        1 - (embedding_vector <-> :embedding) as similarity
                     FROM embeddings
                     WHERE document_id = :document_id
-                      AND (1 - (embedding_vector <-> :query_embedding)) >= :threshold
-                    ORDER BY embedding_vector <-> :query_embedding
+                      AND (1 - (embedding_vector <-> :embedding)) >= :threshold
+                    ORDER BY embedding_vector <-> :embedding
                     LIMIT :k
                 """)
                 params = {
-                    "query_embedding": embedding_list,
+                    "embedding": embedding_str,
                     "document_id": document_id,
-                    "k": k,
-                    "threshold": threshold
+                    "threshold": threshold,
+                    "k": k
                 }
             else:
                 sql = text("""
@@ -174,17 +183,17 @@ class VectorDBService:
                         text_content,
                         document_id,
                         chunk_id,
-                        embedding_vector <-> :query_embedding as distance,
-                        1 - (embedding_vector <-> :query_embedding) as similarity
+                        embedding_vector <-> :embedding as distance,
+                        1 - (embedding_vector <-> :embedding) as similarity
                     FROM embeddings
-                    WHERE (1 - (embedding_vector <-> :query_embedding)) >= :threshold
-                    ORDER BY embedding_vector <-> :query_embedding
+                    WHERE (1 - (embedding_vector <-> :embedding)) >= :threshold
+                    ORDER BY embedding_vector <-> :embedding
                     LIMIT :k
                 """)
                 params = {
-                    "query_embedding": embedding_list,
-                    "k": k,
-                    "threshold": threshold
+                    "embedding": embedding_str,
+                    "threshold": threshold,
+                    "k": k
                 }
             
             with self.engine.connect() as conn:

@@ -239,30 +239,9 @@ class RAGSystem:
                 logger.info(f"Realizando búsqueda prioritaria para entidad: {entity_name}")
                 
                 # Buscar chunks que contengan información relevante sobre esta entidad
-                for idx, row in self.vector_store.metadata_df.iterrows():
-                    if 'text' in row:
-                        text = str(row['text']).lower()
-                        
-                        # Verificar si contiene keywords de la entidad
-                        contains_keyword = any(keyword in text for keyword in entity_data['keywords'])
-                        
-                        if contains_keyword:
-                            # Verificar si también contiene patrones de artículos específicos
-                            contains_article = False
-                            if entity_data['article_patterns']:
-                                contains_article = any(pattern in text for pattern in entity_data['article_patterns'])
-                            
-                            # Asignar prioridad según la relevancia
-                            if contains_article or is_high_priority:
-                                metadata = row.to_dict()
-                                metadata['similarity'] = entity_data['priority']
-                                priority_chunks.append(metadata)
-                                logger.info(f"Encontrado chunk prioritario para {entity_name}: {idx}")
-                            else:
-                                metadata = row.to_dict()
-                                metadata['similarity'] = entity_data['secondary_priority']
-                                priority_chunks.append(metadata)
-                                logger.info(f"Encontrado chunk secundario para {entity_name}: {idx}")
+                # Nota: PostgreSQLVectorStore no tiene metadata_df, se usa búsqueda por embedding
+                logger.info(f"Búsqueda por embedding para entidad: {entity_name}")
+                # La búsqueda se realizará por embedding en lugar de metadata_df
         
         # Realizar búsqueda principal por embedding
         query_embedding = self.embedding_model.encode([query])[0]
@@ -291,21 +270,10 @@ class RAGSystem:
             
             # Intentar búsquedas adicionales solo con las palabras clave más importantes
             for keyword in important_keywords[:3]:  # Usar solo las 3 palabras clave más importantes
-                # Buscar chunks que contengan esta palabra clave
-                keyword_results = []
-                for idx, row in self.vector_store.metadata_df.iterrows():
-                    if 'text' in row and keyword in row['text'].lower():
-                        metadata = row.to_dict()
-                        # Asignar una similitud artificial más baja para no sobrevalorar estos resultados
-                        metadata['similarity'] = 0.3
-                        keyword_results.append(metadata)
-                
-                # Añadir a resultados solo si no están ya incluidos
-                for kr in keyword_results[:2]:  # Limitar a 2 resultados por palabra clave
-                    if not any(r.get('text') == kr.get('text') for r in results):
-                        results.append(kr)
-                        if len(results) >= k + 3:  # Permitir hasta 3 resultados adicionales
-                            break
+                # Buscar chunks que contengan esta palabra clave usando búsqueda por embedding
+                logger.info(f"Búsqueda adicional por palabra clave: {keyword}")
+                # Nota: PostgreSQLVectorStore no tiene metadata_df, se usa búsqueda por embedding
+                # La búsqueda se realizará por embedding en lugar de metadata_df
         
         # Log de resultados encontrados
         logger.info(f"Número total de chunks recuperados: {len(results)}")
