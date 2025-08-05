@@ -47,7 +47,7 @@ class DocumentModel(Base):
     upload_date = Column(DateTime, default=datetime.utcnow, nullable=False)
     processing_status = Column(Text, default='pending', nullable=False)
     num_chunks = Column(BigInteger, default=0, nullable=False)
-    # Nuevas columnas extraídas del JSON document_metadata
+    # Columnas individuales para metadatos del documento
     chunk_count = Column(Integer, nullable=True)
     total_chars = Column(Integer, nullable=True)
     total_words = Column(Integer, nullable=True)

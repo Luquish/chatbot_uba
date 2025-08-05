@@ -107,7 +107,6 @@ class VectorDBService:
                             'upload_date': document_info['upload_date'],
                             'processing_status': document_info['processing_status'],
                             'num_chunks': document_info['num_chunks'],
-                            'document_metadata': document_info['document_metadata'],
                             'updated_at': datetime.now()
                         }
                     )
@@ -155,7 +154,6 @@ class VectorDBService:
                         text_content,
                         document_id,
                         chunk_id,
-                        document_metadata,
                         embedding_vector <-> :query_embedding as distance,
                         1 - (embedding_vector <-> :query_embedding) as similarity
                     FROM embeddings
@@ -176,7 +174,6 @@ class VectorDBService:
                         text_content,
                         document_id,
                         chunk_id,
-                        document_metadata,
                         embedding_vector <-> :query_embedding as distance,
                         1 - (embedding_vector <-> :query_embedding) as similarity
                     FROM embeddings
