@@ -8,10 +8,10 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 from unidecode import unidecode
 
-from config.settings import logger, PRIMARY_MODEL, FALLBACK_MODEL, EMBEDDING_MODEL, MAX_OUTPUT_TOKENS, API_TIMEOUT, RAG_NUM_CHUNKS, SIMILARITY_THRESHOLD, EMBEDDINGS_DIR, GOOGLE_API_KEY, CURSOS_SPREADSHEET_ID, USE_GCS, GCS_BUCKET_NAME, GCS_AUTO_REFRESH
+from config.settings import logger, PRIMARY_MODEL, FALLBACK_MODEL, EMBEDDING_MODEL, MAX_OUTPUT_TOKENS, API_TIMEOUT, RAG_NUM_CHUNKS, SIMILARITY_THRESHOLD, GOOGLE_API_KEY, CURSOS_SPREADSHEET_ID
 from config.constants import INTENT_EXAMPLES, GREETING_WORDS, information_emojis, greeting_emojis, warning_emojis, success_emojis, SHEET_COURSE_KEYWORDS, CALENDAR_INTENT_MAPPING, CALENDAR_MESSAGES
 from models.openai_model import OpenAIModel, OpenAIEmbedding
-from storage.vector_store import FAISSVectorStore
+from storage.vector_store import PostgreSQLVectorStore
 from utils.date_utils import DateUtils
 from handlers.intent_handler import (
     normalize_intent_examples,
@@ -28,7 +28,6 @@ load_dotenv()
 
 class RAGSystem:
     def __init__(self):
-        self.embeddings_dir = Path(EMBEDDINGS_DIR)
         self.user_history = {}
         self.max_history_length = 5
         self.openai_api_key = os.getenv('OPENAI_API_KEY')
@@ -53,21 +52,14 @@ class RAGSystem:
             api_key=self.openai_api_key,
             timeout=self.api_timeout
         )
-        # Inicializar vector store con configuración automática para GCS
-        self.vector_store = FAISSVectorStore(
-            str(self.embeddings_dir / 'faiss_index.bin'),
-            str(self.embeddings_dir / 'metadata.csv'),
-            threshold=self.similarity_threshold,
-            bucket_name=GCS_BUCKET_NAME if USE_GCS else None,
-            auto_refresh=GCS_AUTO_REFRESH if USE_GCS else False
+        # Inicializar vector store con PostgreSQL/pgvector
+        self.vector_store = PostgreSQLVectorStore(
+            threshold=self.similarity_threshold
         )
         
         # Log de configuración
-        if USE_GCS:
-            logger.info(f"Vector store configurado con GCS: {GCS_BUCKET_NAME}")
-            logger.info(f"Auto-refresh habilitado: {GCS_AUTO_REFRESH}")
-        else:
-            logger.info("Vector store configurado para uso local")
+        logger.info("Vector store configurado con PostgreSQL/pgvector")
+        logger.info(f"Umbral de similitud: {self.similarity_threshold}")
         self.date_utils = DateUtils()
         try:
             self.calendar_service = CalendarService()

@@ -58,3 +58,9 @@ Thumbs.db
 
 # Cloud Run
 cloud-run.yaml
+
+# Credenciales de Google Cloud
+service-account.json
+*.json
+!package.json
+!package-lock.json

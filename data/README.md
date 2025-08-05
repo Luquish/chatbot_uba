@@ -7,7 +7,7 @@ Esta carpeta contiene los datos necesarios para el funcionamiento del chatbot cu
 ```
 data/
 ├── embeddings/          # Embeddings locales (fallback para GCS)
-│   ├── faiss_index.bin  # Índice FAISS
+│   └── (migrado a PostgreSQL Cloud SQL)
 │   ├── metadata.csv     # Metadatos de los chunks
 │   └── config.json      # Configuración de embeddings
 └── README.md           # Este archivo

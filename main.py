@@ -107,18 +107,8 @@ async def startup_event():
     try:
         logger.info("Iniciando sistema RAG...")
         
-        # Detectar si estamos en Docker o local
-        # Si /app existe como directorio, estamos en Docker
-        if os.path.exists('/app'):
-            embeddings_dir = '/app/data/embeddings'
-        else:
-            # Estamos ejecutando localmente
-            embeddings_dir = 'data/embeddings'
-            
-        logger.info(f"Utilizando directorio de embeddings: {embeddings_dir}")
-        rag_system = RAGSystem(
-            embeddings_dir=embeddings_dir
-        )
+        logger.info("Inicializando sistema RAG con PostgreSQL...")
+        rag_system = RAGSystem()
         rag_initialized = True
         logger.info("Sistema RAG inicializado correctamente")
     except Exception as e:
@@ -398,8 +388,7 @@ async def health_check():
         "environment": ENVIRONMENT,
         "whatsapp_available": whatsapp_available,
         "test_number_configured": MY_PHONE_NUMBER is not None,
-        "model_path": "data/embeddings",
-        "embeddings_dir": "data/embeddings"
+        "database": "PostgreSQL con pgvector"
     }
     
     # Añadir información sobre la configuración de WhatsApp
@@ -549,7 +538,7 @@ def main():
         
         logger.info(f"Iniciando servidor en {host}:{port}")
         logger.info(f"Entorno: {ENVIRONMENT}")
-        logger.info(f"Ruta de embeddings: {os.getenv('EMBEDDINGS_DIR', 'data/embeddings')}")
+        logger.info("Sistema configurado para usar PostgreSQL con pgvector")
         logger.info(f"GCS Bucket: {os.getenv('GCS_BUCKET_NAME', 'No configurado')}")
         logger.info(f"Número de prueba configurado: {MY_PHONE_NUMBER}")
         

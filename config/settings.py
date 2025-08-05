@@ -121,6 +121,30 @@ class ServerSettings(BaseSettings):
         env_prefix = ''
 
 
+class CloudSQLSettings(BaseSettings):
+    """Configuración de Cloud SQL para PostgreSQL con pgvector."""
+    
+    db_user: str = Field(default='raguser', env='DB_USER')
+    db_pass: str = Field(default='', env='DB_PASS')
+    db_name: str = Field(default='ragdb', env='DB_NAME')
+    cloud_sql_connection_name: Optional[str] = Field(default=None, env='CLOUD_SQL_CONNECTION_NAME')
+    db_private_ip: bool = Field(default=False, env='DB_PRIVATE_IP')
+    
+    # Configuración para PostgreSQL local (desarrollo)
+    db_host: str = Field(default='localhost', env='DB_HOST')
+    db_port: int = Field(default=5432, env='DB_PORT')
+    
+    class Config:
+        env_prefix = ''
+
+    @field_validator('db_private_ip', mode='before')
+    @classmethod
+    def validate_db_private_ip(cls, v):
+        if isinstance(v, str):
+            return v.lower() == 'true'
+        return v
+
+
 class SystemSettings(BaseSettings):
     """Configuración del sistema."""
     
@@ -150,6 +174,7 @@ class ChatbotConfig(BaseSettings):
     google_apis: GoogleApisSettings = GoogleApisSettings()
     server: ServerSettings = ServerSettings()
     system: SystemSettings = SystemSettings()
+    cloudsql: CloudSQLSettings = CloudSQLSettings()
     
     class Config:
         env_prefix = ''
@@ -191,6 +216,10 @@ class ChatbotConfig(BaseSettings):
         # Variables críticas
         if not self.openai.openai_api_key:
             missing_vars.append('OPENAI_API_KEY')
+        
+        # Variables de Cloud SQL (críticas para RAG)
+        if not self.cloudsql.db_user or not self.cloudsql.db_pass or not self.cloudsql.db_name:
+            missing_vars.extend(['DB_USER', 'DB_PASS', 'DB_NAME'])
         
         # Variables de WhatsApp (opcionales pero necesarias para funcionalidad completa)
         whatsapp_vars = [
@@ -261,6 +290,15 @@ class ChatbotConfig(BaseSettings):
                 'drcecim_upload_integration': self.system.drcecim_upload_integration,
                 'log_level': self.logging.log_level,
                 'log_format': self.logging.log_format,
+            },
+            'cloudsql': {
+                'db_user': self.cloudsql.db_user,
+                'db_pass': self.cloudsql.db_pass,
+                'db_name': self.cloudsql.db_name,
+                'cloud_sql_connection_name': self.cloudsql.cloud_sql_connection_name,
+                'db_private_ip': self.cloudsql.db_private_ip,
+                'db_host': self.cloudsql.db_host,
+                'db_port': self.cloudsql.db_port,
             }
         }
 
@@ -329,6 +367,15 @@ PORT = config.server.port
 # System
 DEVICE_PREF = config.system.device_pref
 DRCECIM_UPLOAD_INTEGRATION = config.system.drcecim_upload_integration
+
+# Cloud SQL
+DB_USER = config.cloudsql.db_user
+DB_PASS = config.cloudsql.db_pass
+DB_NAME = config.cloudsql.db_name
+CLOUD_SQL_CONNECTION_NAME = config.cloudsql.cloud_sql_connection_name
+DB_PRIVATE_IP = config.cloudsql.db_private_ip
+DB_HOST = config.cloudsql.db_host
+DB_PORT = config.cloudsql.db_port
 
 # =============================================================================
 # EXPORT DE CONFIGURACIÓN PARA COMPATIBILIDAD

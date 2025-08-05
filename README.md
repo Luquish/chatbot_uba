@@ -37,7 +37,7 @@ chatbot_uba/                     # Backend del chatbot
 │   └── embeddings/            # Fallback local para embeddings
 ├── config/                    # Configuraciones del sistema
 ├── models/                    # Modelos OpenAI
-├── storage/                   # Vector store (FAISS)
+├── storage/                   # Vector store (PostgreSQL/pgvector)
 ├── handlers/                  # Manejadores de intenciones
 ├── services/                  # Servicios externos (Calendar, Sheets)
 ├── utils/                     # Utilidades del sistema
@@ -84,6 +84,7 @@ WHATSAPP_WEBHOOK_VERIFY_TOKEN=your-verify-token
 # Google Cloud Storage (opcional)
 USE_GCS=true
 GCS_BUCKET_NAME=your-bucket-name
+GCS_CREDENTIALS_PATH=./cloud_functions/credentials/service-account.json
 
 # Google APIs (opcional)
 GOOGLE_API_KEY=your-google-api-key
@@ -129,6 +130,31 @@ Para producción pura (sin volúmenes):
 docker-compose -f docker-compose.yml up -d
 ```
 
+### Streamlit Cloud
+
+#### 🔐 Google Cloud Secret Manager
+
+**Respuesta a tu pregunta**: **SÍ, el repo de Streamlit necesita las credenciales** porque:
+
+1. **Streamlit sube archivos** al bucket usando `gcs_service.py`
+2. **Cloud Functions procesan** los archivos del bucket
+3. **Ambos necesitan acceso** a Google Cloud Storage
+
+**Para configurar las credenciales**:
+
+```bash
+# Usar el script existente en cloud_functions
+cd cloud_functions/utils
+python3 migrate_secrets.py --project-id drcecim-465823
+```
+
+**Para Streamlit Cloud específicamente**:
+- Las credenciales se configuran como variables de entorno
+- No se pueden usar archivos locales
+- Se recomienda usar Google Secret Manager para gestión centralizada
+
+**Nota**: El script `migrate_secrets.py` ya existe en `cloud_functions/utils/` y maneja la migración a Google Secret Manager.
+
 ## Arquitectura del Sistema
 
 ```
@@ -165,7 +191,9 @@ El sistema incluye una carpeta `data/embeddings/` como fallback:
 
 - `fastapi`, `uvicorn` - Servidor web
 - `openai` - API de OpenAI
-- `faiss-cpu` - Búsquedas vectoriales
+- `pgvector` - Búsquedas vectoriales en PostgreSQL
+- `cloud-sql-python-connector` - Conexión a Cloud SQL
+- `sqlalchemy` - ORM para PostgreSQL
 - `google-cloud-storage` - Almacenamiento en GCS
 - `google-api-python-client` - APIs de Google
 
