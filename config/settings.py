@@ -54,7 +54,7 @@ class RAGSettings(BaseSettings):
     """Configuración del sistema RAG."""
     
     rag_num_chunks: int = Field(default=8, env='RAG_NUM_CHUNKS')
-    similarity_threshold: float = Field(default=0.2, env='SIMILARITY_THRESHOLD')
+    similarity_threshold: float = Field(default=-0.1, env='SIMILARITY_THRESHOLD')
     embeddings_dir: str = Field(default='data/embeddings', env='EMBEDDINGS_DIR')
     max_history_length: int = Field(default=5, env='MAX_HISTORY_LENGTH')
     
