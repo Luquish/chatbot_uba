@@ -81,14 +81,12 @@ class GoogleCloudSettings(BaseSettings):
         return v
 
 
-class WhatsAppSettings(BaseSettings):
-    """Configuración de WhatsApp Business API."""
+class TelegramSettings(BaseSettings):
+    """Configuración de Telegram Bot API."""
     
-    whatsapp_api_token: Optional[str] = Field(default=None, env='WHATSAPP_API_TOKEN')
-    whatsapp_phone_number_id: Optional[str] = Field(default=None, env='WHATSAPP_PHONE_NUMBER_ID')
-    whatsapp_business_account_id: Optional[str] = Field(default=None, env='WHATSAPP_BUSINESS_ACCOUNT_ID')
-    whatsapp_webhook_verify_token: Optional[str] = Field(default=None, env='WHATSAPP_WEBHOOK_VERIFY_TOKEN')
-    my_phone_number: Optional[str] = Field(default=None, env='MY_PHONE_NUMBER')
+    telegram_bot_token: Optional[str] = Field(default=None, env='TELEGRAM_BOT_TOKEN')
+    telegram_webhook_secret: Optional[str] = Field(default=None, env='TELEGRAM_WEBHOOK_SECRET')
+    telegram_admin_user_id: Optional[str] = Field(default=None, env='TELEGRAM_ADMIN_USER_ID')
     
     class Config:
         env_prefix = ''
@@ -170,7 +168,7 @@ class ChatbotConfig(BaseSettings):
     openai: OpenAISettings = OpenAISettings()
     rag: RAGSettings = RAGSettings()
     gcs: GoogleCloudSettings = GoogleCloudSettings()
-    whatsapp: WhatsAppSettings = WhatsAppSettings()
+    telegram: TelegramSettings = TelegramSettings()
     google_apis: GoogleApisSettings = GoogleApisSettings()
     server: ServerSettings = ServerSettings()
     system: SystemSettings = SystemSettings()
@@ -221,18 +219,17 @@ class ChatbotConfig(BaseSettings):
         if not self.cloudsql.db_user or not self.cloudsql.db_pass or not self.cloudsql.db_name:
             missing_vars.extend(['DB_USER', 'DB_PASS', 'DB_NAME'])
         
-        # Variables de WhatsApp (opcionales pero necesarias para funcionalidad completa)
-        whatsapp_vars = [
-            ('WHATSAPP_API_TOKEN', self.whatsapp.whatsapp_api_token),
-            ('WHATSAPP_PHONE_NUMBER_ID', self.whatsapp.whatsapp_phone_number_id),
-            ('WHATSAPP_BUSINESS_ACCOUNT_ID', self.whatsapp.whatsapp_business_account_id),
-            ('WHATSAPP_WEBHOOK_VERIFY_TOKEN', self.whatsapp.whatsapp_webhook_verify_token)
+        # Variables de Telegram (opcionales pero necesarias para funcionalidad completa)
+        telegram_vars = [
+            ('TELEGRAM_BOT_TOKEN', self.telegram.telegram_bot_token),
+            ('TELEGRAM_WEBHOOK_SECRET', self.telegram.telegram_webhook_secret),
+            ('TELEGRAM_ADMIN_USER_ID', self.telegram.telegram_admin_user_id)
         ]
         
-        missing_whatsapp = [var_name for var_name, var_value in whatsapp_vars if not var_value]
-        if missing_whatsapp:
-            logger.warning(f"Variables de WhatsApp no configuradas: {', '.join(missing_whatsapp)}")
-            logger.warning("El chatbot funcionará pero no podrá enviar/recibir mensajes de WhatsApp")
+        missing_telegram = [var_name for var_name, var_value in telegram_vars if not var_value]
+        if missing_telegram:
+            logger.warning(f"Variables de Telegram no configuradas: {', '.join(missing_telegram)}")
+            logger.warning("El chatbot funcionará pero no podrá enviar/recibir mensajes de Telegram")
         
         if missing_vars:
             raise ValueError(f"Las siguientes variables de entorno son requeridas: {', '.join(missing_vars)}")
@@ -265,12 +262,10 @@ class ChatbotConfig(BaseSettings):
                 'auto_refresh': self.gcs.gcs_auto_refresh,
                 'refresh_interval': self.gcs.gcs_refresh_interval,
             },
-            'whatsapp': {
-                'api_token': self.whatsapp.whatsapp_api_token,
-                'phone_number_id': self.whatsapp.whatsapp_phone_number_id,
-                'business_account_id': self.whatsapp.whatsapp_business_account_id,
-                'webhook_verify_token': self.whatsapp.whatsapp_webhook_verify_token,
-                'my_phone_number': self.whatsapp.my_phone_number,
+            'telegram': {
+                'bot_token': self.telegram.telegram_bot_token,
+                'webhook_secret': self.telegram.telegram_webhook_secret,
+                'admin_user_id': self.telegram.telegram_admin_user_id,
             },
             'google_apis': {
                 'api_key': self.google_apis.google_api_key,
@@ -344,12 +339,10 @@ GCS_BUCKET_NAME = config.gcs.gcs_bucket_name
 GCS_AUTO_REFRESH = config.gcs.gcs_auto_refresh
 GCS_REFRESH_INTERVAL = config.gcs.gcs_refresh_interval
 
-# WhatsApp
-WHATSAPP_API_TOKEN = config.whatsapp.whatsapp_api_token
-WHATSAPP_PHONE_NUMBER_ID = config.whatsapp.whatsapp_phone_number_id
-WHATSAPP_BUSINESS_ACCOUNT_ID = config.whatsapp.whatsapp_business_account_id
-WHATSAPP_WEBHOOK_VERIFY_TOKEN = config.whatsapp.whatsapp_webhook_verify_token
-MY_PHONE_NUMBER = config.whatsapp.my_phone_number
+# Telegram
+TELEGRAM_BOT_TOKEN = config.telegram.telegram_bot_token
+TELEGRAM_WEBHOOK_SECRET = config.telegram.telegram_webhook_secret
+TELEGRAM_ADMIN_USER_ID = config.telegram.telegram_admin_user_id
 
 # Google APIs
 GOOGLE_API_KEY = config.google_apis.google_api_key
@@ -398,5 +391,5 @@ if __name__ != '__main__':
     validate_config()
     logger.info(f"Configuración cargada para entorno: {ENVIRONMENT}")
     logger.info(f"Usando GCS: {USE_GCS}")
-    logger.info(f"WhatsApp configurado: {bool(WHATSAPP_API_TOKEN)}")
+    logger.info(f"Telegram configurado: {bool(TELEGRAM_BOT_TOKEN)}")
     logger.info(f"Google APIs configuradas: {bool(GOOGLE_API_KEY)}") 

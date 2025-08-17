@@ -664,7 +664,7 @@ RESPONDE SIGUIENDO ESTAS REGLAS:
 3. Si hay artículos, resoluciones o reglamentos específicos, cita exactamente el número y fuente 
 4. No omitas información importante de los documentos relevantes
 5. Si hay documentos específicos, cita naturalmente su origen ("Según el reglamento...")
-6. NO uses formato Markdown ya que esto no se procesa correctamente en WhatsApp
+6. NO uses formato Markdown ya que esto no se procesa correctamente en mensajería
 7. Para enfatizar texto, usa MAYÚSCULAS o comillas
 8. Usa viñetas con guiones (-) cuando sea útil para organizar información
 9. Si la información está incompleta, sugiere contactar a @cecim.nemed por instagram
@@ -689,7 +689,7 @@ RESPONDE SIGUIENDO ESTAS REGLAS:
                 logger.error(f"Error también con el modelo de respaldo: {str(e2)}")
                 return f"{emoji} Lo siento, hubo un error al generar la respuesta. Por favor, intenta de nuevo o contacta a @cecim.nemed por instagram."
                 
-        # Limpiar formatos que no se procesan bien en WhatsApp
+        # Limpiar formatos que no se procesan bien en mensajería
         response = re.sub(r'\*\*(.+?)\*\*', r'\1', response)
         response = re.sub(r'\*(.+?)\*', r'\1', response)
         response = re.sub(r'\_\_(.+?)\_\_', r'\1', response)

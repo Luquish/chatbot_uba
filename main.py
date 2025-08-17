@@ -6,7 +6,7 @@ from typing import Dict, Any
 from fastapi import FastAPI, HTTPException, Request, Response
 from dotenv import load_dotenv
 from rag_system import RAGSystem
-from handlers.whatsapp_handler import WhatsAppHandler
+from handlers.telegram_handler import TelegramHandler
 import uvicorn
 import re
 
@@ -24,35 +24,23 @@ logger = logging.getLogger(__name__)
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 logger.info(f"Iniciando en entorno: {ENVIRONMENT}")
 
-# Configuración de WhatsApp Business API
-WHATSAPP_API_TOKEN = os.getenv('WHATSAPP_API_TOKEN')
-WHATSAPP_PHONE_NUMBER_ID = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
-WHATSAPP_BUSINESS_ACCOUNT_ID = os.getenv('WHATSAPP_BUSINESS_ACCOUNT_ID')
-WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv('WHATSAPP_WEBHOOK_VERIFY_TOKEN')
-
-# Número de teléfono para pruebas
-MY_PHONE_NUMBER = os.getenv('MY_PHONE_NUMBER')
+# Configuración de Telegram Bot API
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_WEBHOOK_SECRET = os.getenv('TELEGRAM_WEBHOOK_SECRET')
+TELEGRAM_ADMIN_USER_ID = os.getenv('TELEGRAM_ADMIN_USER_ID')
 
 # Inicialización de variables globales
 rag_system = None
 rag_initialized = False
 
-# Función para obtener el handler de WhatsApp
-def get_whatsapp_handler() -> WhatsAppHandler:
-    if all([
-        WHATSAPP_API_TOKEN,
-        WHATSAPP_PHONE_NUMBER_ID,
-        WHATSAPP_BUSINESS_ACCOUNT_ID
-    ]):
-        return WhatsAppHandler(
-            WHATSAPP_API_TOKEN,
-            WHATSAPP_PHONE_NUMBER_ID,
-            WHATSAPP_BUSINESS_ACCOUNT_ID
-        )
+# Función para obtener el handler de Telegram
+def get_telegram_handler() -> TelegramHandler:
+    if TELEGRAM_BOT_TOKEN:
+        return TelegramHandler(TELEGRAM_BOT_TOKEN)
     else:
         raise HTTPException(
             status_code=503,
-            detail="Integración con WhatsApp no disponible. Faltan credenciales."
+            detail="Integración con Telegram no disponible. Falta TELEGRAM_BOT_TOKEN."
         )
 
 # Inicializar FastAPI
@@ -63,42 +51,37 @@ app = FastAPI(
 )
 
 
-# Middleware para manejo directo de WebHooks de WhatsApp en producción
-if ENVIRONMENT == "production":
-    @app.middleware("http")
-    async def whatsapp_webhook_middleware(request: Request, call_next):
-        """
-        Middleware para manejar la verificación de webhooks de WhatsApp en producción.
-        Solo se activa en entorno de producción para permitir la comunicación directa
-        entre WhatsApp Business API y Cloud Run, sin necesidad de Glitch como intermediario.
-        """
-        # Solo interceptar peticiones GET al endpoint del webhook (verificación)
-        if request.url.path == "/webhook/whatsapp" and request.method == "GET":
-            logger.info("Interceptando solicitud de verificación de webhook directa")
-            # Obtener parámetros de verificación
-            params = request.query_params
-            mode = params.get("hub.mode")
-            token = params.get("hub.verify_token")
-            challenge = params.get("hub.challenge")
+# Middleware para logging y debugging de webhooks
+# Middleware para logging y debugging
+@app.middleware("http")
+async def telegram_webhook_middleware(request: Request, call_next):
+    """Middleware para loggear todas las requests."""
+    
+    # Logging de la request entrante
+    logger.info(f"Request recibida: {request.method} {request.url}")
+    logger.debug(f"Headers: {dict(request.headers)}")
+    
+    # Verificación especial para webhook de Telegram
+    if request.url.path == "/webhook/telegram":
+        try:
+            # Para requests GET (verificación de webhook)
+            if request.method == "GET":
+                logger.info("Verificación GET del webhook de Telegram")
             
-            # Obtener token de verificación configurado
-            verify_token = WHATSAPP_WEBHOOK_VERIFY_TOKEN
-            
-            # Verificar modo y token
-            if mode == "subscribe" and token == verify_token:
-                logger.info(f"Webhook verificado con éxito en middleware: {challenge}")
-                # Responder con el challenge directamente
-                return Response(content=challenge, media_type="text/plain")
-            else:
-                logger.warning(f"Verificación fallida del webhook. Token esperado: {verify_token}, recibido: {token}")
-                return Response(status_code=403, content="Forbidden")
+            # Para requests POST (mensajes)
+            elif request.method == "POST":
+                # Log básico sin consumir el body
+                secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+                logger.info(f"Webhook POST de Telegram - Secret token presente: {bool(secret_token)}")
                 
-        # Para todas las demás solicitudes, continuar con el flujo normal
-        return await call_next(request)
-        
-    logger.info("Middleware para manejo directo de webhooks de WhatsApp activado (modo producción)")
-else:
-    logger.info("Ejecutando en modo desarrollo - Webhooks redirigidos desde Glitch")
+        except Exception as e:
+            logger.error(f"Error en middleware de Telegram: {str(e)}")
+    
+    # Procesar la request
+    response = await call_next(request)
+    
+    logger.info(f"Response: {response.status_code}")
+    return response
 
 @app.on_event("startup")
 async def startup_event():
@@ -115,12 +98,10 @@ async def startup_event():
         logger.error(f"Error al inicializar sistema RAG: {str(e)}")
         raise e
 
-@app.post("/webhook/whatsapp")
-async def whatsapp_webhook(request: Request):
+@app.post("/webhook/telegram")
+async def telegram_webhook(request: Request):
     """
-    Webhook para recibir mensajes de WhatsApp.
-    En producción: Recibe directamente mensajes de la API de WhatsApp Business.
-    En desarrollo: Recibe mensajes redireccionados desde Glitch.
+    Webhook para recibir mensajes de Telegram.
     
     Args:
         request (Request): Request de FastAPI
@@ -129,277 +110,202 @@ async def whatsapp_webhook(request: Request):
         Dict: Respuesta con el estado del procesamiento
     """
     try:
-        # Para debugging, loguear el método y las cabeceras
-        logger.info(f"Webhook recibido - Método: {request.method}")
+        logger.info(f"Webhook de Telegram recibido - Método: {request.method}")
         logger.info(f"Headers: {request.headers}")
         
-        # Obtener el cuerpo de la solicitud
-        body = await request.body()
+        # Obtener el handler de Telegram
+        telegram_handler = get_telegram_handler()
         
-        # Validar la firma del webhook en producción
-        if ENVIRONMENT == "production":
-            signature = request.headers.get("x-hub-signature-256", "")
-            if not signature:
-                logger.error("Firma no encontrada en headers")
-                raise HTTPException(status_code=403, detail="Firma no encontrada")
-
-            # Calcular y verificar firma
-            import hmac
-            import hashlib
-
-            expected_signature = hmac.new(
-                WHATSAPP_WEBHOOK_VERIFY_TOKEN.encode(),
-                body,
-                hashlib.sha256
-            ).hexdigest()
-
-            if not hmac.compare_digest(f"sha256={expected_signature}", signature):
-                logger.error("Firma inválida")
-                raise HTTPException(status_code=403, detail="Firma inválida")
+        # Validar webhook
+        if not await telegram_handler.validate_webhook(request):
+            raise HTTPException(status_code=403, detail="Webhook no autorizado")
         
-        # Parsear el cuerpo JSON
+        # Parsear mensaje
+        message_data = await telegram_handler.parse_message(request)
+        
+        if not message_data.get("body"):
+            return {"status": "ignored", "message": "Mensaje vacío o no procesable"}
+        
+        # Extraer datos del mensaje
+        message_body = message_data["body"]
+        user_id = message_data["from"]
+        chat_id = message_data["chat_id"]
+        profile_name = message_data["profile_name"]
+        
+        logger.info(f"Mensaje recibido de {profile_name} ({user_id}): {message_body}")
+        
+        # Verificar que RAG esté inicializado
+        if not rag_initialized:
+            logger.error("Sistema RAG no inicializado")
+            return {
+                "status": "error", 
+                "message": "Sistema RAG no inicializado"
+            }
+        
+        # Enviar acción de typing
+        await telegram_handler.send_typing_action(chat_id)
+        
         try:
-            data = await request.json()
-            logger.debug(f"Datos recibidos: {json.dumps(data, indent=2)}")
-        except json.JSONDecodeError as e:
-            logger.error(f"Error al parsear JSON: {str(e)}")
-            raise HTTPException(status_code=400, detail="JSON inválido")
+            # Procesar con RAG
+            result = rag_system.process_query(
+                message_body, 
+                user_id=user_id,
+                user_name=profile_name
+            )
+            response_text = result["response"]
+            
+            # Enviar respuesta a Telegram
+            send_result = await telegram_handler.send_message(
+                chat_id,
+                response_text
+            )
+            
+            return {
+                "status": "success",
+                "from": user_id,
+                "chat_id": chat_id,
+                "message": message_body,
+                "response": response_text
+            }
+            
+        except Exception as e:
+            logger.error(f"Error al procesar mensaje: {str(e)}")
+            return {"status": "error", "message": str(e)}
         
-        # Verificar si es un mensaje
-        if "object" not in data:
-            logger.warning("Objeto no encontrado en la solicitud")
-            return {"status": "ignored"}
+    except Exception as e:
+        logger.error(f"Error en webhook de Telegram: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/webhook/telegram")
+async def verify_telegram_webhook(request: Request):
+    """Endpoint para verificar el webhook de Telegram."""
+    try:
+        telegram_handler = get_telegram_handler()
+        webhook_info = await telegram_handler.get_webhook_info()
+        
+        return {
+            "status": "success",
+            "webhook_info": webhook_info
+        }
+        
+    except Exception as e:
+        logger.error(f"Error al verificar webhook de Telegram: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/test-telegram")
+async def test_telegram():
+    """Endpoint para probar la conexión con Telegram."""
+    logger.info("Endpoint de prueba /test-telegram llamado")
+    
+    try:
+        if not TELEGRAM_BOT_TOKEN:
+            return {"status": "error", "message": "TELEGRAM_BOT_TOKEN no configurado"}
+    
+        telegram_handler = get_telegram_handler()
+        
+        # Test básico: obtener información del bot
+        bot_info = await telegram_handler.get_me()
+        
+        if bot_info.get("ok"):
+            bot_data = bot_info.get("result", {})
+            response_data = {
+                "status": "success",
+                "message": "Conexión con Telegram exitosa",
+                "bot_info": {
+                    "id": bot_data.get("id"),
+                    "username": bot_data.get("username"),
+                    "first_name": bot_data.get("first_name"),
+                    "can_join_groups": bot_data.get("can_join_groups"),
+                    "can_read_all_group_messages": bot_data.get("can_read_all_group_messages"),
+                    "supports_inline_queries": bot_data.get("supports_inline_queries")
+                }
+            }
             
-        if data["object"] != "whatsapp_business_account":
-            logger.warning(f"Objeto no esperado: {data['object']}")
-            return {"status": "ignored"}
-            
-        # Procesar entrada
-        try:
-            entry = data["entry"][0]
-            changes = entry["changes"][0]
-            value = changes["value"]
-            
-            # Si tenemos un mensaje o cualquier evento, procesamos
-            if "messages" in value:
-                message = value.get("messages", [])[0]
-                message_body = message.get("text", {}).get("body", "")
-                from_number = message.get("from", "")
-                message_id = message.get("id", "")
+            # Si hay un admin user ID configurado, enviar mensaje de prueba
+            if TELEGRAM_ADMIN_USER_ID:
+                test_result = await telegram_handler.send_message(
+                    TELEGRAM_ADMIN_USER_ID,
+                    "🤖 Este es un mensaje de prueba desde el endpoint /test-telegram.\n\n✅ El bot está funcionando correctamente."
+                )
                 
-                # Obtener el nombre del perfil si está disponible
-                contacts = value.get("contacts", [])
-                profile_name = contacts[0].get("profile", {}).get("name", "") if contacts else ""
-                logger.info(f"Nombre del perfil: {profile_name}")
-                
-                # Extraer ID del número de teléfono de negocio desde metadata
-                business_phone_number_id = value.get("metadata", {}).get("phone_number_id", "")
-                
-                logger.info(f"Webhook completo - De: {from_number}, Nombre: {profile_name}, Mensaje: '{message_body}'")
-                
-                # Procesar el mensaje usando RAG
-                if not rag_initialized:
-                    logger.error("Sistema RAG no inicializado")
-                    return {
-                        "status": "error", 
-                        "message": "Sistema RAG no inicializado"
-                    }
-                
-                try:
-                    # Normalizar el número del remitente para WhatsApp
-                    whatsapp_handler = get_whatsapp_handler()
-                    normalized_from = whatsapp_handler.normalize_phone_number(from_number)
-                    
-                    # Procesar con RAG
-                    result = rag_system.process_query(
-                        message_body, 
-                        user_id=normalized_from,
-                        user_name=profile_name
-                    )
-                    response_text = result["response"]
-                    
-                    # Enviar respuesta a WhatsApp
-                    send_result = await whatsapp_handler.send_message(
-                        normalized_from,
-                        response_text
-                    )
-                    
-                    return {
-                        "status": "success",
-                        "from": normalized_from,
-                        "message": message_body,
-                        "response": response_text
-                    }
-                except Exception as e:
-                    logger.error(f"Error al procesar mensaje: {str(e)}")
-                    return {"status": "error", "message": str(e)}
-                
-            elif "statuses" in value:
-                status = value.get("statuses", [])[0]
-                status_type = status.get("status")
-                message_id = status.get("id")
-                recipient = status.get("recipient_id")
-                
-                if status_type == "sent":
-                    logger.debug(f"✓ Mensaje {message_id} enviado a {recipient}")
-                elif status_type == "delivered":
-                    logger.debug(f"✓✓ Mensaje {message_id} entregado a {recipient}")
-                elif status_type == "read":
-                    logger.debug(f"✓✓✓ Mensaje {message_id} leído por {recipient}")
+                if test_result.get('status') == 'success':
+                    response_data["test_message"] = "Mensaje de prueba enviado al admin"
                 else:
-                    logger.debug(f"Estado desconocido para mensaje {message_id}: {status_type}")
-                
-                return {"status": "success", "message": f"Estado {status_type} procesado"}
-            else:
-                logger.warning("Webhook recibido sin mensajes ni estados")
-                return {"status": "ignored", "message": "Webhook sin contenido procesable"}
-                
-        except (KeyError, IndexError) as e:
-            logger.error(f"Error al procesar entrada: {str(e)}")
-            return {"status": "error", "message": "Formato de entrada inválido"}
-        
-        return {"status": "ignored", "message": "Evento no procesable"}
+                    response_data["test_message_error"] = test_result.get('message')
             
-    except Exception as e:
-        logger.error(f"Error en webhook de WhatsApp: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/webhook/whatsapp")
-async def verify_webhook(request: Request):
-    """
-    Endpoint para verificar el webhook de WhatsApp.
-    """
-    try:
-        # Obtener parámetros de la consulta
-        mode = request.query_params.get("hub.mode")
-        token = request.query_params.get("hub.verify_token")
-        challenge = request.query_params.get("hub.challenge")
-        
-        # Loguear para debugging
-        logger.info(f"Verificación de webhook recibida:")
-        logger.info(f"Mode: {mode}")
-        logger.info(f"Token recibido: {token}")
-        logger.info(f"Token esperado: {WHATSAPP_WEBHOOK_VERIFY_TOKEN}")
-        logger.info(f"Challenge: {challenge}")
-        
-        # Verificar modo y token
-        if mode and token and mode == "subscribe" and token == WHATSAPP_WEBHOOK_VERIFY_TOKEN:
-            if not challenge:
-                logger.error("Challenge no encontrado")
-                return {"status": "error", "message": "No challenge found"}
-                
-            logger.info(f"Verificación exitosa, devolviendo challenge: {challenge}")
-            return int(challenge)
-            
-        logger.error("Verificación fallida - Token o modo inválidos")
-        raise HTTPException(status_code=403, detail="Forbidden")
-            
-    except Exception as e:
-        logger.error(f"Error en verificación de webhook: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/test-message")
-async def test_message():
-    """
-    Envía un mensaje de prueba al número de WhatsApp configurado en MY_PHONE_NUMBER.
-    
-    Returns:
-        dict: Resultado del envío del mensaje de prueba
-    """
-    if not MY_PHONE_NUMBER:
-        logger.error("No se ha configurado MY_PHONE_NUMBER en las variables de entorno")
-        return {"error": "No se ha configurado MY_PHONE_NUMBER en las variables de entorno"}
-    
-    try:
-        # Verificar credenciales
-        if not WHATSAPP_API_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
-            return {"error": "Faltan credenciales de WhatsApp Business API en las variables de entorno"}
-        
-        # Formatear el número de teléfono según el formato de la API de WhatsApp
-        # (sin el signo '+', solo dígitos)
-        formatted_phone = MY_PHONE_NUMBER
-        # Eliminar el '+' si existe y cualquier otro caracter no numérico
-        formatted_phone = re.sub(r'[^0-9]', '', formatted_phone)
-            
-        logger.info(f"Enviando mensaje de prueba a: {MY_PHONE_NUMBER} (formateado: {formatted_phone})")
-        
-        # Configurar headers para la API de WhatsApp
-        headers = {
-            "Authorization": f"Bearer {WHATSAPP_API_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        
-        # Preparar datos del mensaje
-        data = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": formatted_phone,
-            "type": "text",
-            "text": {
-                "preview_url": False,
-                "body": "¡Hola! Este es un mensaje de prueba del Chatbot UBA Medicina. Si lo recibes, la configuración es correcta."
-            }
-        }
-        
-        # Enviar solicitud a la API de WhatsApp
-        response = requests.post(
-            f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages",
-            headers=headers,
-            json=data
-        )
-        
-        # Verificar respuesta
-        response_data = response.json()
-        
-        if response.status_code == 200:
-            return {
-                "success": True,
-                "message_id": response_data.get("messages", [{}])[0].get("id"),
-                "status": "sent",
-                "to": MY_PHONE_NUMBER,
-                "whatsapp_api_response": response_data
-            }
+            return response_data
         else:
-            error_message = response_data.get('error', {}).get('message', 'Error desconocido')
-            error_code = response_data.get('error', {}).get('code', '')
             return {
-                "success": False,
-                "error": f"Error al enviar mensaje: {error_message} (Código: {error_code})",
-                "to": MY_PHONE_NUMBER,
-                "details": response_data
+                "status": "error", 
+                "message": "Error al conectar con Telegram",
+                "details": bot_info
             }
-    
     except Exception as e:
-        logging.error(f"Error al enviar mensaje de prueba: {str(e)}")
-        return {"error": f"Error al enviar mensaje de prueba: {str(e)}"}
+        logger.error(f"Error en test-telegram: {str(e)}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@app.post("/telegram/setup-webhook")
+async def setup_telegram_webhook(webhook_url: str):
+    """Configura el webhook de Telegram."""
+    try:
+        telegram_handler = get_telegram_handler()
+        result = await telegram_handler.set_webhook(webhook_url)
+        
+        return {
+            "status": "success" if result.get("ok") else "error",
+            "result": result
+        }
+        
+    except Exception as e:
+        logger.error(f"Error al configurar webhook: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/telegram/delete-webhook")
+async def delete_telegram_webhook():
+    """Elimina el webhook de Telegram."""
+    try:
+        telegram_handler = get_telegram_handler()
+        result = await telegram_handler.delete_webhook()
+        
+        return {
+            "status": "success" if result.get("ok") else "error",
+            "result": result
+        }
+        
+    except Exception as e:
+        logger.error(f"Error al eliminar webhook: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():
     """Endpoint para verificar el estado del servicio."""
-    whatsapp_available = (
-        WHATSAPP_API_TOKEN is not None and 
-        WHATSAPP_PHONE_NUMBER_ID is not None and
-        WHATSAPP_BUSINESS_ACCOUNT_ID is not None and
-        WHATSAPP_WEBHOOK_VERIFY_TOKEN is not None
-    )
-    
-    status_info = {
-        "status": "healthy", 
-        "environment": ENVIRONMENT,
-        "whatsapp_available": whatsapp_available,
-        "test_number_configured": MY_PHONE_NUMBER is not None,
-        "database": "PostgreSQL con pgvector"
-    }
-    
-    # Añadir información sobre la configuración de WhatsApp
-    if whatsapp_available:
-        status_info["whatsapp_config"] = {
-            "phone_number_id": WHATSAPP_PHONE_NUMBER_ID,
-            "business_account_id": WHATSAPP_BUSINESS_ACCOUNT_ID,
-            "webhook_verify_token": "configured" if WHATSAPP_WEBHOOK_VERIFY_TOKEN else "missing"
+    try:
+        # Verificar sistema RAG
+        rag_status = "initialized" if rag_initialized else "not_initialized"
+        
+        # Verificar Telegram
+        telegram_available = TELEGRAM_BOT_TOKEN is not None
+        
+        status_info = {
+            "status": "healthy",
+            "environment": ENVIRONMENT,
+            "rag_status": rag_status,
+            "telegram_available": telegram_available,
+            "database": "PostgreSQL con pgvector"
         }
-    
-    return status_info
+        
+        if telegram_available:
+            status_info["telegram_config"] = {
+                "bot_token": "configured" if TELEGRAM_BOT_TOKEN else "missing",
+                "webhook_secret": "configured" if TELEGRAM_WEBHOOK_SECRET else "missing",
+                "admin_user_id": "configured" if TELEGRAM_ADMIN_USER_ID else "missing"
+            }
+        
+        return status_info
+        
+    except Exception as e:
+        logger.error(f"Error en health check: {str(e)}")
+        return {"status": "unhealthy", "error": str(e)}
 
 @app.post("/chat")
 async def chat_endpoint(message: Dict[str, str]):
@@ -472,59 +378,24 @@ async def chat_endpoint(message: Dict[str, str]):
             "sources": []
         }
 
-@app.post("/api/whatsapp/message")
-async def receive_whatsapp_message(request: Request):
-    """
-    Endpoint para recibir mensajes de WhatsApp redireccionados desde Glitch.
-    Se mantiene para compatibilidad en entorno de desarrollo.
-    """
-    # Agregar log de entrada para confirmar que se está llamando al endpoint
-    logger.info("======= MENSAJE RECIBIDO EN /api/whatsapp/message =======")
-    
-    if ENVIRONMENT == "production":
-        logger.warning("Endpoint /api/whatsapp/message llamado en producción. Considere actualizar la configuración para usar /webhook/whatsapp directamente.")
-    
-    # En vez de duplicar lógica, redirigimos internamente al endpoint principal
-    return await whatsapp_webhook(request)
+# Legacy endpoint para compatibilidad
+@app.post("/api/message")
+async def receive_legacy_message_redirect(request: Request):
+    """Endpoint legacy que redirige a Telegram."""
+    logger.warning("Endpoint /api/message es legacy. Use /webhook/telegram")
+    return {
+        "status": "deprecated",
+        "message": "Este endpoint está deprecado. Use /webhook/telegram para Telegram Bot API"
+    }
 
 @app.get("/test-webhook")
 async def test_webhook():
-    """Endpoint para probar la conexión directamente."""
-    logger.warning("Endpoint de prueba /test-webhook llamado")
+    """Endpoint legacy que redirige al test de Telegram."""
+    logger.warning("Endpoint de prueba /test-webhook llamado - redirigiendo a /test-telegram")
     
-    try:
-        # Verificar que podemos enviar mensajes
-        if MY_PHONE_NUMBER:
-            try:
-                formatted_phone = re.sub(r'[^0-9]', '', MY_PHONE_NUMBER)
-                
-                whatsapp_handler = get_whatsapp_handler()
-                result = await whatsapp_handler.send_message(
-                    formatted_phone,
-                    "Este es un mensaje de prueba directo desde el endpoint /test-webhook."
-                )
-                
-                if result.get('status') == 'success':
-                    return {
-                        "status": "success",
-                        "message": "Mensaje de prueba enviado directamente",
-                        "to": formatted_phone,
-                        "details": result
-                    }
-                else:
-                    return {
-                        "status": "error",
-                        "message": "Error al enviar mensaje de prueba",
-                        "details": result
-                    }
-            except Exception as e:
-                logger.error(f"Error al enviar mensaje directo: {str(e)}", exc_info=True)
-                return {"status": "error", "message": str(e)}
-        else:
-            return {"status": "error", "message": "No hay número de teléfono configurado para pruebas"}
-    except Exception as e:
-        logger.error(f"Error en test-webhook: {str(e)}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+    # Redirigir al endpoint actual de Telegram
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/test-telegram", status_code=302)
 
 def main():
     """Función principal para ejecutar el servidor."""
@@ -540,7 +411,7 @@ def main():
         logger.info(f"Entorno: {ENVIRONMENT}")
         logger.info("Sistema configurado para usar PostgreSQL con pgvector")
         logger.info(f"GCS Bucket: {os.getenv('GCS_BUCKET_NAME', 'No configurado')}")
-        logger.info(f"Número de prueba configurado: {MY_PHONE_NUMBER}")
+        logger.info(f"Telegram disponible: {bool(TELEGRAM_BOT_TOKEN)}")
         
         # Iniciar servidor
         uvicorn.run("main:app", host=host, port=port, reload=(ENVIRONMENT == 'development'))

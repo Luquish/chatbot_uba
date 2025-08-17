@@ -17,7 +17,7 @@ from test_openai import TestOpenAI
 from test_rag_system import TestRAGSystem
 from test_chatbot_interaction import TestChatbotInteraction
 from test_handlers_interaction import TestHandlersInteraction
-from test_whatsapp import TestWhatsApp
+from test_telegram import TestTelegram
 from test_google_services import TestGoogleServices
 from test_http_endpoints import TestHttpEndpoints
 from test_simulation import TestSimulation
@@ -35,7 +35,7 @@ class TestRunner:
             TestRAGSystem(),
             TestChatbotInteraction(),
             TestHandlersInteraction(),
-            TestWhatsApp(),
+            TestTelegram(),
             TestGoogleServices(),
             TestHttpEndpoints(),
             TestSimulation()
@@ -119,8 +119,8 @@ class TestRunner:
                 categories['database'] = result['passed']
             elif 'OpenAI' in test_name or 'RAG' in test_name:
                 categories['ai'] = result['passed']
-            elif 'WhatsApp' in test_name or 'Interaction' in test_name:
-                categories['whatsapp'] = result['passed']
+            elif 'Telegram' in test_name or 'Interaction' in test_name:
+                categories['telegram'] = result['passed']
             elif 'Google' in test_name:
                 categories['google'] = result['passed']
             elif 'Http' in test_name:
@@ -149,7 +149,7 @@ class TestRunner:
             print("🎉 ¡SISTEMA LISTO PARA PRODUCCIÓN!")
             print("📝 Pasos para despliegue:")
             print("   1. Revisar variables de entorno en Cloud Run")
-            print("   2. Configurar webhook de WhatsApp en producción")
+            print("   2. Configurar webhook de Telegram en producción")
             print("   3. Ejecutar: ./deploy.sh")
             print("   4. Validar endpoints en el entorno de producción")
         elif overall_score >= 70:

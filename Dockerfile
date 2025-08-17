@@ -23,16 +23,21 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY main.py .
 COPY rag_system.py .
 
-# Essential scripts
+# Essential scripts (solo setup_database.py si es necesario)
 COPY scripts/__init__.py scripts/
+COPY scripts/setup_database.py scripts/
 
-# Module directories
+# Module directories - Backend necesita estos
 COPY config/ config/
-COPY services/ services/
+COPY db/ db/
+COPY handlers/ handlers/
 COPY models/ models/
+COPY services/ services/
 COPY storage/ storage/
 COPY utils/ utils/
-COPY handlers/ handlers/
+
+# Crear directorios para logs (no para datos - se usa Cloud SQL + GCS)
+RUN mkdir -p logs
 
 # Default environment variables
 ENV HOST=0.0.0.0

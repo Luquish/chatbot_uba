@@ -79,7 +79,7 @@ fi
 
 print_status "📦 Construyendo y desplegando el servicio..."
 
-# Comando de deploy
+# Comando de deploy con todas las variables de entorno necesarias
 gcloud run deploy $SERVICE_NAME \
     --source . \
     --allow-unauthenticated \
@@ -93,7 +93,8 @@ gcloud run deploy $SERVICE_NAME \
     --port=8080 \
     --timeout=300 \
     --concurrency=80 \
-    --set-env-vars=ENVIRONMENT=production
+    --set-env-vars=ENVIRONMENT=production,HOST=0.0.0.0,PRIMARY_MODEL=gpt-4o-mini,FALLBACK_MODEL=gpt-4.1-nano,EMBEDDING_MODEL=text-embedding-3-small,TEMPERATURE=0.7,TOP_P=0.9,TOP_K=50,MAX_OUTPUT_TOKENS=300,API_TIMEOUT=30,MAX_HISTORY_LENGTH=5,GCS_AUTO_REFRESH=true,GCS_REFRESH_INTERVAL=3600,LOG_LEVEL=INFO \
+    --set-secrets=OPENAI_API_KEY=openai-api-key:latest,TELEGRAM_BOT_TOKEN=telegram-bot-token:latest,TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:latest,TELEGRAM_ADMIN_USER_ID=telegram-admin-user-id:latest,GOOGLE_API_KEY=google-api-key:latest,CURSOS_SPREADSHEET_ID=cursos-spreadsheet-id:latest,CALENDAR_ID_EXAMENES=calendar-id-examenes:latest,CALENDAR_ID_INSCRIPCIONES=calendar-id-inscripciones:latest,CALENDAR_ID_CURSADA=calendar-id-cursada:latest,CALENDAR_ID_TRAMITES=calendar-id-tramites:latest,GCS_BUCKET_NAME=gcs-bucket-name:latest,DB_USER=db-user:latest,DB_PASS=db-pass:latest,DB_NAME=db-name:latest,CLOUD_SQL_CONNECTION_NAME=cloud-sql-connection-name:latest,DB_PRIVATE_IP=db-private-ip:latest,USE_GCS=use-gcs:latest,RAG_NUM_CHUNKS=rag-num-chunks:latest,SIMILARITY_THRESHOLD=similarity-threshold:latest
 
 if [ $? -eq 0 ]; then
     print_success "✅ Deploy completado exitosamente!"
@@ -102,18 +103,19 @@ if [ $? -eq 0 ]; then
     SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format="value(status.url)")
     
     print_success "🌐 URL del servicio: $SERVICE_URL"
-    print_success "📱 Webhook URL para WhatsApp: $SERVICE_URL/webhook/whatsapp"
+    print_success "🤖 Webhook URL para Telegram: $SERVICE_URL/webhook/telegram"
     
     echo ""
     print_status "📋 Próximos pasos:"
-    echo "1. Actualiza el webhook en Meta Developer Console:"
-    echo "   URL: $SERVICE_URL/webhook/whatsapp"
-    echo "   Verify Token: g-A-eAvDRi2f2LOSjLoNq-tcpL2uwxCjpqsWtr1B7uw"
+    echo "1. Configura el webhook de Telegram ejecutando:"
+    echo "   curl -X POST \"$SERVICE_URL/telegram/setup-webhook\" -H \"Content-Type: application/json\" -d '{\"webhook_url\": \"$SERVICE_URL/webhook/telegram\"}'"
+    echo "2. Verifica que el webhook esté configurado:"
+    echo "   curl $SERVICE_URL/webhook/telegram"
     echo ""
-    echo "2. Prueba el health check:"
+    echo "3. Prueba el health check:"
     echo "   curl $SERVICE_URL/health"
     echo ""
-    echo "3. Ejecuta los tests:"
+    echo "4. Ejecuta los tests:"
     echo "   python test.py"
     
 else

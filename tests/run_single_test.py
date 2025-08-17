@@ -16,7 +16,7 @@ from test_openai import TestOpenAI
 from test_rag_system import TestRAGSystem
 from test_chatbot_interaction import TestChatbotInteraction
 from test_handlers_interaction import TestHandlersInteraction
-from test_whatsapp import TestWhatsApp
+from test_telegram import TestTelegram
 from test_google_services import TestGoogleServices
 from test_http_endpoints import TestHttpEndpoints
 from test_simulation import TestSimulation
@@ -30,7 +30,7 @@ TEST_MAP = {
     'rag': TestRAGSystem,
     'interaction': TestChatbotInteraction,
     'handlers': TestHandlersInteraction,
-    'whatsapp': TestWhatsApp,
+    'telegram': TestTelegram,
     'google': TestGoogleServices,
     'http': TestHttpEndpoints,
     'simulation': TestSimulation

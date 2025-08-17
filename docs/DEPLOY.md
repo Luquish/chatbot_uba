@@ -41,10 +41,13 @@ Las variables están configuradas en Google Secret Manager y se cargan automáti
 
 ## Post-Deploy
 
-### 1. Actualizar Webhook de WhatsApp
-En Meta Developer Console:
-- **URL**: `https://uba-chatbot-xxxxx-southamerica-east1.run.app/webhook/whatsapp`
-- **Verify Token**: `g-A-eAvDRi2f2LOSjLoNq-tcpL2uwxCjpqsWtr1B7uw`
+### 1. Configurar Webhook de Telegram
+Ejecutar comando para configurar webhook:
+```bash
+curl -X POST "https://uba-chatbot-xxxxx-southamerica-east1.run.app/telegram/setup-webhook" \
+     -H "Content-Type: application/json" \
+     -d '{"webhook_url": "https://uba-chatbot-xxxxx-southamerica-east1.run.app/webhook/telegram"}'
+```
 
 ### 2. Probar el Servicio
 ```bash
@@ -106,7 +109,7 @@ cat Dockerfile
 
 - **Servicio**: `https://uba-chatbot-xxxxx-southamerica-east1.run.app`
 - **Health Check**: `/health`
-- **Webhook WhatsApp**: `/webhook/whatsapp`
+- **Webhook Telegram**: `/webhook/telegram`
 - **Chat API**: `/chat`
 - **Test**: `/test-webhook`
 

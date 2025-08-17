@@ -23,6 +23,9 @@ aiohttp>=3.8.1
 pytz>=2023.3
 tenacity>=8.2.0
 
+# Telegram Bot API
+python-telegram-bot>=20.7
+
 # Google APIs
 google-api-python-client==2.118.0
 google-cloud-storage>=2.13.0

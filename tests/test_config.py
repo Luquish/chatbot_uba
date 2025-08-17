@@ -29,13 +29,13 @@ class TestConfig(BaseTest):
             self.log_info(f"Modelo principal: {self.config.openai.primary_model}")
             self.log_info(f"Modelo de embeddings: {self.config.openai.embedding_model}")
             
-            # Verificar WhatsApp
-            whatsapp_configured = all([
-                self.config.whatsapp.whatsapp_api_token,
-                self.config.whatsapp.whatsapp_phone_number_id,
-                self.config.whatsapp.whatsapp_business_account_id
+            # Verificar Telegram
+            telegram_configured = all([
+                self.config.telegram.telegram_bot_token,
+                self.config.telegram.telegram_webhook_secret,
+                self.config.telegram.telegram_admin_user_id
             ])
-            self.log_success(f"WhatsApp configurado: {whatsapp_configured}")
+            self.log_success(f"Telegram configurado: {telegram_configured}")
             
             # Verificar base de datos
             db_configured = all([
@@ -50,7 +50,7 @@ class TestConfig(BaseTest):
             self.log_success(f"Google APIs configuradas: {google_configured}")
             
             # Verificar configuración general
-            if not all([whatsapp_configured, db_configured, google_configured]):
+            if not all([telegram_configured, db_configured, google_configured]):
                 self.log_warning("Algunas configuraciones están incompletas")
                 return False
                 

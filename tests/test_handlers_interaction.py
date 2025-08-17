@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Test de interacción completa con todos los handlers del sistema.
-Valida FAQs, Calendar, Sheets, Intents y WhatsApp handlers.
+Valida FAQs, Calendar, Sheets, Intents y Telegram handlers.
 """
 
 import os
@@ -20,7 +20,7 @@ from handlers.faqs_handler import handle_faq_query, get_faq_intent
 from handlers.calendar_handler import get_calendar_events
 from handlers.courses_handler import handle_sheet_course_query, parse_sheet_course_data
 from handlers.intent_handler import get_query_intent, handle_conversational_intent
-from handlers.whatsapp_handler import WhatsAppHandler
+from handlers.telegram_handler import TelegramHandler
 
 # Importar servicios para mocks
 from services.calendar_service import CalendarService
@@ -32,7 +32,7 @@ class TestHandlersInteraction(BaseTest):
     """Test de interacción completa con todos los handlers."""
     
     def get_test_description(self) -> str:
-        return "Test de interacción con todos los handlers (FAQs, Calendar, Sheets, Intents, WhatsApp)"
+        return "Test de interacción con todos los handlers (FAQs, Calendar, Sheets, Intents, Telegram)"
     
     def get_test_category(self) -> str:
         return "handlers"
@@ -49,7 +49,7 @@ class TestHandlersInteraction(BaseTest):
             results.append(self._test_calendar_handler())
             results.append(self._test_courses_handler())
             results.append(self._test_intent_handler())
-            results.append(self._test_whatsapp_handler())
+            results.append(self._test_telegram_handler())
             
             successful_tests = sum(results)
             total_tests = len(results)
@@ -318,67 +318,95 @@ class TestHandlersInteraction(BaseTest):
             print(f"  ❌ Error en Intent Handler: {str(e)}")
             return False
     
-    def _test_whatsapp_handler(self) -> bool:
-        """Test del handler de WhatsApp."""
-        print("\n📱 Probando WhatsApp Handler...")
+    def _test_telegram_handler(self) -> bool:
+        """Test del handler de Telegram."""
+        print("\n🤖 Probando Telegram Handler...")
         
         try:
-            # Crear instancia de WhatsAppHandler con datos de prueba
-            whatsapp_handler = WhatsAppHandler(
-                api_token="test_token",
-                phone_number_id="test_phone_id", 
-                business_account_id="test_business_id"
+            # Crear instancia de TelegramHandler con datos de prueba
+            telegram_handler = TelegramHandler(
+                bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"  # Token de prueba válido en formato
             )
             
-            # Test normalización de número de teléfono
-            test_numbers = [
-                ('5411123456789', '5411123456789'),  # Sin 9 en posición 3
-                ('549911234567890', '54911234567890'),  # Con 9 en posición 3, debe remover
-                ('+54 9 11 2345-6789', '541123456789'),  # Con formato, 9 en posición 3 se remueve
-            ]
-            
-            normalization_success = 0
-            
-            for original, expected in test_numbers:
-                normalized = whatsapp_handler.normalize_phone_number(original)
-                print(f"  📝 Normalización: {original} → {normalized}")
-                
-                if normalized == expected:
-                    print(f"     ✅ Normalización correcta")
-                    normalization_success += 1
-                else:
-                    print(f"     ⚠️ Esperado: {expected}, Obtenido: {normalized}")
-            
-            # Test de creación de payload (mock)
-            print("  📝 Probando estructura de mensaje...")
-            
-            # Simular que send_message funciona correctamente
-            # (en tests reales no querríamos enviar mensajes reales)
+            # Test de configuración básica
+            print("  📝 Probando configuración básica...")
             
             # Verificar que los atributos esenciales están configurados
             attributes_check = all([
-                hasattr(whatsapp_handler, 'api_token'),
-                hasattr(whatsapp_handler, 'phone_number_id'),
-                hasattr(whatsapp_handler, 'api_url'),
-                hasattr(whatsapp_handler, 'headers'),
-                whatsapp_handler.api_url.startswith('https://graph.facebook.com')
+                hasattr(telegram_handler, 'bot_token'),
+                hasattr(telegram_handler, 'api_url'),
+                hasattr(telegram_handler, 'webhook_secret'),
+                telegram_handler.api_url.startswith('https://api.telegram.org/bot')
             ])
             
             if attributes_check:
-                print(f"     ✅ WhatsApp handler configurado correctamente")
+                print(f"     ✅ Telegram handler configurado correctamente")
                 structure_success = True
             else:
-                print(f"     ⚠️ WhatsApp handler mal configurado")
+                print(f"     ⚠️ Telegram handler mal configurado")
                 structure_success = False
             
-            # Resultado combinado
-            total_success = (normalization_success >= 2) and structure_success
+            # Test de parseo de mensaje (simulado)
+            print("  📝 Probando parseo de mensaje...")
             
-            print(f"  📱 WhatsApp Handler: normalización={normalization_success}/3, estructura={'✅' if structure_success else '❌'}")
+            # Simular datos de mensaje de Telegram
+            mock_message_data = {
+                "message": {
+                    "message_id": 123,
+                    "from": {
+                        "id": 987654321,
+                        "first_name": "Juan",
+                        "last_name": "Pérez",
+                        "username": "juanperez"
+                    },
+                    "chat": {
+                        "id": 987654321,
+                        "type": "private"
+                    },
+                    "date": 1640995200,
+                    "text": "Hola, ¿cómo están?"
+                }
+            }
+            
+            # Simular el parseo (sin hacer request real)
+            try:
+                # Solo verificamos que los métodos existen
+                methods_exist = all([
+                    hasattr(telegram_handler, 'parse_message'),
+                    hasattr(telegram_handler, 'send_message'),
+                    hasattr(telegram_handler, 'validate_webhook'),
+                    hasattr(telegram_handler, 'get_me')
+                ])
+                
+                if methods_exist:
+                    print(f"     ✅ Métodos esenciales disponibles")
+                    methods_success = True
+                else:
+                    print(f"     ⚠️ Faltan métodos esenciales")
+                    methods_success = False
+                    
+            except Exception as e:
+                print(f"     ⚠️ Error en test de métodos: {str(e)}")
+                methods_success = False
+            
+            # Test de URL API
+            print("  📝 Probando URL de API...")
+            expected_url = "https://api.telegram.org/bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+            url_correct = telegram_handler.api_url == expected_url
+            
+            if url_correct:
+                print(f"     ✅ URL de API configurada correctamente")
+            else:
+                print(f"     ⚠️ URL incorrecta. Esperada: {expected_url}, Actual: {telegram_handler.api_url}")
+            
+            # Resultado combinado
+            total_success = structure_success and methods_success and url_correct
+            
+            print(f"  🤖 Telegram Handler: estructura={'✅' if structure_success else '❌'}, métodos={'✅' if methods_success else '❌'}, URL={'✅' if url_correct else '❌'}")
             return total_success
             
         except Exception as e:
-            print(f"  ❌ Error en WhatsApp Handler: {str(e)}")
+            print(f"  ❌ Error en Telegram Handler: {str(e)}")
             return False
 
 

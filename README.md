@@ -1,33 +1,33 @@
 # Chatbot Administrativo UBA
 
-Un sistema de chatbot administrativo para la Universidad de Buenos Aires (UBA) basado en tecnología RAG (Retrieval Augmented Generation) e integración con WhatsApp. El sistema proporciona respuestas precisas y contextuales a consultas administrativas utilizando documentos institucionales.
+Un sistema de chatbot administrativo para la Universidad de Buenos Aires (UBA) basado en tecnología RAG (Retrieval Augmented Generation) e integración con Telegram. El sistema proporciona respuestas precisas y contextuales a consultas administrativas utilizando documentos institucionales.
 
 ## Descripción General
 
-Este proyecto implementa un asistente virtual para cualquier facultad de la UBA que responde consultas administrativas a través de WhatsApp. El sistema utiliza técnicas avanzadas de procesamiento de lenguaje natural:
+Este proyecto implementa un asistente virtual para cualquier facultad de la UBA que responde consultas administrativas a través de Telegram. El sistema utiliza técnicas avanzadas de procesamiento de lenguaje natural:
 
 ### Características Principales
 
 - **Sistema RAG**: Generación Aumentada por Recuperación que combina recuperación de información y generación de respuestas contextuales.
-- **Integración WhatsApp**: Conexión directa con la API de WhatsApp Business para enviar y recibir mensajes.
+- **Integración Telegram**: Conexión directa con la API de Telegram Bot para enviar y recibir mensajes.
 - **Sistema de Intenciones**: Clasificación semántica de consultas para personalizar las respuestas según el tipo de pregunta.
 - **Almacenamiento Híbrido**: Carga embeddings desde Google Cloud Storage con fallback local.
 - **Integración con Google APIs**: Calendario y Sheets para información dinámica.
 
 ### Flujo del Sistema
 
-1. El estudiante envía una consulta por WhatsApp
+1. El estudiante envía una consulta por Telegram
 2. El backend de FastAPI recibe el mensaje a través de un webhook
 3. El sistema RAG analiza la consulta e identifica la intención
 4. Se recupera información relevante desde la base de conocimientos
 5. Se genera una respuesta utilizando la información contextual y la consulta
-6. La respuesta se envía de vuelta al estudiante a través de WhatsApp
+6. La respuesta se envía de vuelta al estudiante a través de Telegram
 
 ## Estructura del Proyecto
 
 ```
 chatbot_uba/                     # Backend del chatbot
-├── main.py                      # FastAPI + WhatsApp webhook
+├── main.py                      # FastAPI + Telegram webhook
 ├── rag_system.py               # Sistema RAG principal
 ├── requirements.txt            # Dependencias (dev + prod unificadas)
 ├── Dockerfile                  # Imagen de contenedor
@@ -75,11 +75,10 @@ OPENAI_API_KEY=your-openai-api-key
 PRIMARY_MODEL=gpt-4o-mini
 EMBEDDING_MODEL=text-embedding-3-small
 
-# WhatsApp Business API
-WHATSAPP_API_TOKEN=your-whatsapp-token
-WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
-WHATSAPP_BUSINESS_ACCOUNT_ID=your-business-account-id
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=your-verify-token
+# Telegram Bot API
+TELEGRAM_BOT_TOKEN=your-bot-token-from-botfather
+TELEGRAM_WEBHOOK_SECRET=your-webhook-secret
+TELEGRAM_ADMIN_USER_ID=your-user-id
 
 # Google Cloud Storage (opcional)
 USE_GCS=true
@@ -159,8 +158,8 @@ python3 migrate_secrets.py --project-id drcecim-465823
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   WhatsApp      │    │   FastAPI       │    │   RAG System    │
-│   Business API  │───▶│   Backend       │───▶│   + OpenAI      │
+│   Telegram      │    │   FastAPI       │    │   RAG System    │
+│   Bot API       │───▶│   Backend       │───▶│   + OpenAI      │
 │                 │    │                 │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                 │
@@ -207,7 +206,7 @@ El sistema incluye una carpeta `data/embeddings/` como fallback:
 
 - Python 3.11+
 - Cuenta de OpenAI con API key
-- Cuenta de WhatsApp Business (opcional)
+- Bot de Telegram (crear con @BotFather)
 - Google Cloud Storage (opcional)
 
 ---

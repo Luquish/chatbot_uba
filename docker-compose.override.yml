@@ -2,13 +2,11 @@ version: '3.8'
 
 services:
   chatbot:
+    # Override para desarrollo local
+    environment:
+      - ENVIRONMENT=development
     volumes:
-      - ./data/embeddings:/app/data/embeddings
-      - ./scripts:/app/scripts
-      - ./config:/app/config
-      - ./models:/app/models
-      - ./storage:/app/storage
-      - ./utils:/app/utils
-      - ./handlers:/app/handlers
-      - ./services:/app/services
-      - ./rag_system.py:/app/rag_system.py
+      # Solo logs para debugging en desarrollo
+      - ./logs:/app/logs
+      # Variables de entorno para desarrollo
+      - ./.env:/app/.env:ro

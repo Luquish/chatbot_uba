@@ -50,6 +50,7 @@ def get_connection():
     connector = get_connector()
     
     try:
+        # Para Cloud SQL Connector, usar la contraseña directamente sin encoding
         conn = connector.connect(
             CLOUD_SQL_CONNECTION_NAME,
             "pg8000",
@@ -94,6 +95,7 @@ def get_engine():
     connector = get_connector()
     
     def getconn():
+        # Para Cloud SQL Connector, usar la contraseña directamente sin encoding
         return connector.connect(
             CLOUD_SQL_CONNECTION_NAME,
             "pg8000",

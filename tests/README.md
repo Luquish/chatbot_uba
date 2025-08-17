@@ -13,7 +13,7 @@ tests/
 ├── test_openai.py             # Test de modelos OpenAI
 ├── test_rag_system.py         # Test del sistema RAG
 ├── test_chatbot_interaction.py # Test de interacciones
-├── test_whatsapp.py           # Test de WhatsApp
+├── test_telegram.py           # Test de Telegram
 ├── test_vector_services.py    # Test de servicios vectoriales
 ├── test_google_services.py    # Test de Google APIs
 ├── test_http_endpoints.py     # Test de endpoints HTTP
@@ -43,7 +43,7 @@ python run_single_test.py database
 python run_single_test.py openai
 python run_single_test.py rag
 python run_single_test.py interaction
-python run_single_test.py whatsapp
+python run_single_test.py telegram
 python run_single_test.py vector
 python run_single_test.py google
 python run_single_test.py http
@@ -59,7 +59,7 @@ python run_single_test.py simulation
 | `openai` | Modelos OpenAI (embeddings y generación) | IA |
 | `rag` | Sistema RAG completo | IA |
 | `interaction` | Interacciones usuario-backend | Funcionalidad |
-| `whatsapp` | Integración de WhatsApp | Comunicación |
+| `telegram` | Integración de Telegram | Comunicación |
 | `vector` | Servicios vectoriales avanzados | IA |
 | `google` | Servicios de Google (Sheets y Calendar) | APIs |
 | `http` | Endpoints HTTP críticos | Servidor |
