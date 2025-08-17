@@ -34,17 +34,45 @@ def parse_sheet_course_data(rows: List[List[str]]) -> List[Dict]:
     
     # Mapear nombres de columna de la configuración a índices reales basados en las cabeceras leídas
     col_map = {}
-    try:
-        col_map['activity'] = headers_from_sheet.index(SHEET_QUERY_CONFIG['activity_col_name'])
-        col_map['form'] = headers_from_sheet.index(SHEET_QUERY_CONFIG['form_col_name'])
-        col_map['date'] = headers_from_sheet.index(SHEET_QUERY_CONFIG['date_col_name'])
-        # Opcional: Mapear otras columnas si son necesarias (ej. HORARIO, MODALIDAD)
-        col_map['time'] = headers_from_sheet.index('HORARIO') if 'HORARIO' in headers_from_sheet else -1
-        col_map['modality'] = headers_from_sheet.index('MODALIDAD') if 'MODALIDAD' in headers_from_sheet else -1
-    except ValueError as e:
-        logger.error(f"Error al mapear columnas desde la hoja: {e}. Cabeceras encontradas: {headers_from_sheet}")
-        logger.error(f"Asegúrate que los nombres en SHEET_QUERY_CONFIG ({SHEET_QUERY_CONFIG['activity_col_name']}, {SHEET_QUERY_CONFIG['form_col_name']}, etc.) coincidan con la hoja.")
+    
+    # Mapeo flexible para diferentes nombres de columnas
+    activity_aliases = ['NOMBRE DE ACTIVIDAD', 'ACTIVIDAD', 'NOMBRE', 'CURSO', 'NOMBRE DEL CURSO']
+    form_aliases = ['FORMULARIO', 'LINK', 'ENLACE', 'URL']
+    date_aliases = ['FECHA', 'DÍA', 'DIA']
+    
+    # Buscar columna de actividad
+    col_map['activity'] = -1
+    for alias in activity_aliases:
+        if alias in headers_from_sheet:
+            col_map['activity'] = headers_from_sheet.index(alias)
+            logger.info(f"Columna de actividad encontrada: {alias}")
+            break
+    
+    # Buscar columna de formulario
+    col_map['form'] = -1
+    for alias in form_aliases:
+        if alias in headers_from_sheet:
+            col_map['form'] = headers_from_sheet.index(alias)
+            logger.info(f"Columna de formulario encontrada: {alias}")
+            break
+    
+    # Buscar columna de fecha
+    col_map['date'] = -1
+    for alias in date_aliases:
+        if alias in headers_from_sheet:
+            col_map['date'] = headers_from_sheet.index(alias)
+            logger.info(f"Columna de fecha encontrada: {alias}")
+            break
+    
+    # Verificar que se encontraron las columnas esenciales
+    if col_map['activity'] == -1 or col_map['date'] == -1:
+        logger.error(f"No se pudieron encontrar las columnas esenciales. Cabeceras encontradas: {headers_from_sheet}")
+        logger.error(f"Actividad: {col_map['activity']}, Fecha: {col_map['date']}")
         return []
+    
+    # Opcional: Mapear otras columnas si son necesarias (ej. HORARIO, MODALIDAD)
+    col_map['time'] = headers_from_sheet.index('HORARIO') if 'HORARIO' in headers_from_sheet else -1
+    col_map['modality'] = headers_from_sheet.index('MODALIDAD') if 'MODALIDAD' in headers_from_sheet else -1
 
     parsed_data = []
     for i, row in enumerate(rows[SHEET_QUERY_CONFIG['header_row']:]):
@@ -159,11 +187,49 @@ def handle_sheet_course_query(query: str, sheets_service: SheetsService,
         logger.warning("Servicio de Google Sheets no disponible o ID de hoja no configurado.")
         return None # Devuelve None para que el RAG normal pueda continuar
 
-    # Determinar el sheet_name a consultar dinámicamente basado en el mes actual
+    # Determinar el sheet_name a consultar dinámicamente
     from utils.date_utils import DateUtils
     date_utils = DateUtils()
-    sheet_name_to_query = date_utils.get_current_month_name()
-    logger.info(f"Consultando hoja del mes actual: {sheet_name_to_query}")
+    
+    # Detectar si se menciona un mes específico en la consulta
+    months_es = {
+        'enero': 'ENERO', 'febrero': 'FEBRERO', 'marzo': 'MARZO', 'abril': 'ABRIL',
+        'mayo': 'MAYO', 'junio': 'JUNIO', 'julio': 'JULIO', 'agosto': 'AGOSTO',
+        'septiembre': 'SEPTIEMBRE', 'octubre': 'OCTUBRE', 'noviembre': 'NOVIEMBRE', 'diciembre': 'DICIEMBRE'
+    }
+    
+    query_lower = query.lower()
+    sheet_name_to_query = None
+    
+    # Buscar meses mencionados en la consulta
+    for month_name, month_upper in months_es.items():
+        if month_name in query_lower:
+            sheet_name_to_query = month_upper
+            logger.info(f"Mes detectado en consulta: {sheet_name_to_query}")
+            break
+    
+    # Si no se detectó un mes específico, verificar referencias relativas
+    if not sheet_name_to_query:
+        if any(phrase in query_lower for phrase in ["mes que viene", "próximo mes", "proximo mes", "siguiente mes"]):
+            # Obtener el mes siguiente
+            current_month = date_utils.get_today().month
+            next_month = current_month + 1 if current_month < 12 else 1
+            next_month_name = list(months_es.values())[next_month - 1]
+            sheet_name_to_query = next_month_name
+            logger.info(f"Mes siguiente detectado: {sheet_name_to_query}")
+        elif any(phrase in query_lower for phrase in ["mes pasado", "mes anterior", "último mes", "ultimo mes"]):
+            # Obtener el mes anterior
+            current_month = date_utils.get_today().month
+            prev_month = current_month - 1 if current_month > 1 else 12
+            prev_month_name = list(months_es.values())[prev_month - 1]
+            sheet_name_to_query = prev_month_name
+            logger.info(f"Mes anterior detectado: {sheet_name_to_query}")
+        else:
+            # Usar el mes actual
+            sheet_name_to_query = date_utils.get_current_month_name()
+            logger.info(f"Usando mes actual: {sheet_name_to_query}")
+    else:
+        logger.info(f"Consultando hoja del mes especificado: {sheet_name_to_query}")
     
     # Obtener todos los cursos de la hoja primero
     range_to_query = f"'{sheet_name_to_query}'!{SHEET_QUERY_CONFIG['range']}"

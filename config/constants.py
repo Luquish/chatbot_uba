@@ -212,6 +212,12 @@ medical_emojis = ["🏥", "👨‍⚕️", "👩‍⚕️", "🩺"]
 
 # Configuraciones específicas para consultas de calendario
 CALENDAR_INTENT_MAPPING = {
+    'eventos_generales': {
+        'keywords': ['eventos', 'evento', 'próximos', 'proximos', 'próximo', 'proximo', 'esta semana', 'este mes', 'cuáles son', 'cuales son', 'qué hay', 'que hay'],
+        'tool': 'get_events_this_week',
+        'params': {},
+        'no_events_message': 'No hay eventos programados para este período.'
+    },
     'examenes': {
         'keywords': ['examen', 'examenes', 'parcial', 'parciales', 'final', 'finales', 'evaluación'],
         'tool': 'get_events_by_type',

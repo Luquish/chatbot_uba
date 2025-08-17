@@ -37,6 +37,8 @@ def get_calendar_events(calendar_service: CalendarService, calendar_intent: str 
             if tool == 'get_events_by_type':
                 calendar_type = intent_config['params']['calendar_type']
                 events = calendar_service.get_events_by_type(calendar_type)
+            elif tool == 'get_events_this_week':
+                events = calendar_service.get_events_this_week()
             elif tool == 'get_events_by_date_range':
                 # Implementar lógica para rango de fechas si es necesario
                 events = calendar_service.get_events_by_date_range()
