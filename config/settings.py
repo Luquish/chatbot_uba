@@ -104,6 +104,8 @@ class GoogleApisSettings(BaseSettings):
     calendar_id_cursada: Optional[str] = Field(default=None, env='CALENDAR_ID_CURSADA')
     calendar_id_tramites: Optional[str] = Field(default=None, env='CALENDAR_ID_TRAMITES')
     
+
+    
     class Config:
         env_prefix = ''
 
@@ -274,6 +276,7 @@ class ChatbotConfig(BaseSettings):
                 'calendar_inscripciones': self.google_apis.calendar_id_inscripciones,
                 'calendar_cursada': self.google_apis.calendar_id_cursada,
                 'calendar_tramites': self.google_apis.calendar_id_tramites,
+
             },
             'server': {
                 'environment': self.server.environment,

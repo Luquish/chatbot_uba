@@ -135,6 +135,22 @@ class DateUtils:
         else:
             return f"{start_date.day} de {months_es[start_date.month]} de {start_date.year} al {end_date.day} de {months_es[end_date.month]} de {end_date.year}"
 
+    def get_current_month_name(self) -> str:
+        """
+        Obtiene el nombre del mes actual en español y en mayúsculas.
+        
+        Returns:
+            str: Nombre del mes actual (ej: "AGOSTO", "SEPTIEMBRE")
+        """
+        months_es = {
+            1: 'ENERO', 2: 'FEBRERO', 3: 'MARZO', 4: 'ABRIL',
+            5: 'MAYO', 6: 'JUNIO', 7: 'JULIO', 8: 'AGOSTO',
+            9: 'SEPTIEMBRE', 10: 'OCTUBRE', 11: 'NOVIEMBRE', 12: 'DICIEMBRE'
+        }
+        
+        today = self.get_today()
+        return months_es[today.month]
+
     def parse_date_from_text(self, text: str) -> Optional[datetime.date]:
         """
         Intenta extraer una fecha específica de un texto.

@@ -7,6 +7,7 @@ import datetime
 from typing import List, Dict, Any, Optional
 
 from config.constants import SHEET_QUERY_CONFIG, SHEET_COURSE_KEYWORDS, information_emojis
+from config.settings import config
 from services.sheets_service import SheetsService
 from utils.date_utils import DateUtils
 
@@ -158,9 +159,11 @@ def handle_sheet_course_query(query: str, sheets_service: SheetsService,
         logger.warning("Servicio de Google Sheets no disponible o ID de hoja no configurado.")
         return None # Devuelve None para que el RAG normal pueda continuar
 
-    # Determinar el sheet_name a consultar (por defecto es la configuración)
-    sheet_name_to_query = SHEET_QUERY_CONFIG['sheet_name']
-    # Se podría extender para buscar la hoja correcta según el mes actual si es necesario
+    # Determinar el sheet_name a consultar dinámicamente basado en el mes actual
+    from utils.date_utils import DateUtils
+    date_utils = DateUtils()
+    sheet_name_to_query = date_utils.get_current_month_name()
+    logger.info(f"Consultando hoja del mes actual: {sheet_name_to_query}")
     
     # Obtener todos los cursos de la hoja primero
     range_to_query = f"'{sheet_name_to_query}'!{SHEET_QUERY_CONFIG['range']}"

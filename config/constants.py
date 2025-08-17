@@ -274,9 +274,15 @@ QUERY_EXPANSIONS = {
 }
 
 # CONFIGURACIÓN PARA GOOGLE SHEETS (CURSOS)
-# El usuario debe asegurarse que la hoja principal se llama 'MARZO' o cambiarlo aquí.
+# El usuario debe asegurarse que la hoja principal se llama con el nombre del mes actual o cambiarlo aquí.
+def get_current_sheet_name():
+    """Obtiene dinámicamente el nombre de la hoja basado en el mes actual."""
+    from utils.date_utils import DateUtils
+    date_utils = DateUtils()
+    return os.getenv('GOOGLE_SHEETS_DEFAULT_SHEET_NAME', date_utils.get_current_month_name())
+
 SHEET_QUERY_CONFIG = {
-    'sheet_name': os.getenv('GOOGLE_SHEETS_DEFAULT_SHEET_NAME', 'MARZO'),
+    'sheet_name': get_current_sheet_name(),
     'range': 'A:E',
     'header_row': 1,
     'activity_col_name': 'NOMBRE DE ACTIVIDAD',
