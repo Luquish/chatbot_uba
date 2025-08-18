@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from dotenv import load_dotenv
 from rag_system import RAGSystem
 from handlers.telegram_handler import TelegramHandler
+from services.session_service import session_service
 import uvicorn
 import re
 
@@ -300,6 +301,9 @@ async def health_check():
                 "webhook_secret": "configured" if TELEGRAM_WEBHOOK_SECRET else "missing",
                 "admin_user_id": "configured" if TELEGRAM_ADMIN_USER_ID else "missing"
             }
+        
+        # Añadir estadísticas de sesiones
+        status_info["session_stats"] = session_service.get_session_stats()
         
         return status_info
         

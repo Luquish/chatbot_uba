@@ -23,6 +23,7 @@ from handlers.calendar_handler import get_calendar_events
 from handlers.faqs_handler import handle_faq_query
 from services.calendar_service import CalendarService
 from services.sheets_service import SheetsService
+from services.session_service import session_service
 
 load_dotenv()
 
@@ -132,26 +133,157 @@ class RAGSystem:
                 "sources": ["Preguntas Frecuentes"]
             }
         
-        # Cursos (Google Sheets)
-        if self.sheets_service and any(keyword in query_lower for keyword in SHEET_COURSE_KEYWORDS):
+        # Cursos (Google Sheets) - con soporte para contexto conversacional
+        # Verificar PRIMERO si es una consulta relativa de cursos
+        context = session_service.get_context_for_relative_query(user_id, query_original)
+        
+        # Si es una consulta relativa sobre cursos O contiene palabras clave de cursos O menciona un mes con contexto de cursos
+        months_es = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+        mentions_month = any(month in query_lower for month in months_es)
+        has_context_courses = context["query_type"] == "cursos"
+        
+        is_course_query = (
+            any(keyword in query_lower for keyword in SHEET_COURSE_KEYWORDS) or 
+            (context["is_relative"] and context["query_type"] == "cursos") or
+            (mentions_month and has_context_courses)  # NUEVO: detectar meses con contexto de cursos
+        )
+        
+        if self.sheets_service and is_course_query:
+            if context["is_relative"] and context["resolved_month"]:
+                # Es una consulta relativa con mes resuelto
+                logger.info(f"Procesando consulta relativa de cursos: {context['explanation']}")
+                
+                # Modificar la consulta para incluir el mes resuelto
+                modified_query = f"cursos {context['resolved_month']}"
+                sheet_course_response = handle_sheet_course_query(
+                    modified_query, self.sheets_service, self.CURSOS_SPREADSHEET_ID, self.date_utils
+                )
+                
+                # Actualizar contexto con la nueva consulta
+                session_service.update_session_context(
+                    user_id, query_original, "cursos", context["resolved_month"]
+                )
+                
+                if sheet_course_response:
+                    # Personalizar la respuesta para indicar que se interpretó la consulta relativa
+                    response_with_context = f"📅 {context['explanation']}:\n\n{sheet_course_response}"
+                    self.update_user_history(user_id, query_original, response_with_context)
+                    return {
+                        "query": query_original, "response": response_with_context,
+                        "query_type": "info_cursos_relativa",
+                        "relevant_chunks": [], "sources": [f"Google Sheet Cursos - {context['resolved_month']}"]
+                    }
+            
+            # Consulta normal de cursos
             sheet_course_response = handle_sheet_course_query(
                 query_original, self.sheets_service, self.CURSOS_SPREADSHEET_ID, self.date_utils
             )
             if sheet_course_response:
+                # Detectar qué mes se consultó para actualizar el contexto
+                query_lower_for_month = query_original.lower()
+                months_es = {
+                    'enero': 'ENERO', 'febrero': 'FEBRERO', 'marzo': 'MARZO', 'abril': 'ABRIL',
+                    'mayo': 'MAYO', 'junio': 'JUNIO', 'julio': 'JULIO', 'agosto': 'AGOSTO',
+                    'septiembre': 'SEPTIEMBRE', 'octubre': 'OCTUBRE', 'noviembre': 'NOVIEMBRE', 'diciembre': 'DICIEMBRE'
+                }
+                
+                detected_month = None
+                for month_name, month_upper in months_es.items():
+                    if month_name in query_lower_for_month:
+                        detected_month = month_upper
+                        break
+                
+                # Si no se detectó un mes específico, verificar referencias relativas
+                if not detected_month:
+                    if any(phrase in query_lower_for_month for phrase in ["mes que viene", "próximo mes", "proximo mes", "siguiente mes"]):
+                        # Obtener el mes siguiente
+                        current_month = self.date_utils.get_today().month
+                        next_month = current_month + 1 if current_month < 12 else 1
+                        detected_month = list(months_es.values())[next_month - 1]
+                    else:
+                        # Usar el mes actual como fallback
+                        detected_month = self.date_utils.get_current_month_name()
+                
+                # Actualizar contexto
+                session_service.update_session_context(
+                    user_id, query_original, "cursos", detected_month
+                )
+                
                 self.update_user_history(user_id, query_original, sheet_course_response)
                 return {
                     "query": query_original, "response": sheet_course_response,
                     "query_type": "info_cursos",
                     "relevant_chunks": [], "sources": [f"Google Sheet Cursos"]
                 }
-        # Calendario
+        # Calendario - con soporte para contexto conversacional
+        # Verificar si es una consulta relativa de calendario O contiene palabras clave de calendario
+        is_calendar_query = False
         calendar_intent = None
-        for intent, config in CALENDAR_INTENT_MAPPING.items():
-            if any(keyword in query_lower for keyword in config['keywords']):
-                calendar_intent = intent
-                break
-        if calendar_intent:
+        
+        # Si es una consulta relativa sobre calendario
+        if context["is_relative"] and context["query_type"].startswith("calendario") and context["resolved_time_reference"]:
+            is_calendar_query = True
+            calendar_intent = context["calendar_intent"]  # Usar el intent anterior
+            
+            logger.info(f"Procesando consulta relativa de calendario: {context['explanation']}")
+            
+            # Crear consulta modificada con la referencia temporal resuelta
+            modified_query = f"eventos {context['resolved_time_reference']}"
             calendar_response = get_calendar_events(self.calendar_service, calendar_intent)
+            
+            # Actualizar contexto con la nueva consulta
+            session_service.update_session_context(
+                user_id, query_original, f"calendario_{calendar_intent}", 
+                calendar_intent=calendar_intent, 
+                time_reference=context["resolved_time_reference"]
+            )
+            
+            if calendar_response:
+                # Personalizar la respuesta para indicar que se interpretó la consulta relativa
+                response_with_context = f"📅 {context['explanation']}:\n\n{calendar_response}"
+                self.update_user_history(user_id, query_original, response_with_context)
+                return {
+                    "query": query_original, "response": response_with_context,
+                    "query_type": f"calendario_{calendar_intent}_relativa",
+                    "relevant_chunks": [], "sources": [f"Calendario Académico - {context['resolved_time_reference']}"]
+                }
+        
+        # Consulta normal de calendario (detectar por palabras clave O mes con contexto de calendario)
+        has_context_calendar = context["query_type"].startswith("calendario")
+        
+        if not is_calendar_query:
+            # Detectar por palabras clave de calendario
+            for intent, config in CALENDAR_INTENT_MAPPING.items():
+                if any(keyword in query_lower for keyword in config['keywords']):
+                    calendar_intent = intent
+                    is_calendar_query = True
+                    break
+            
+            # También detectar si menciona un mes con contexto de calendario
+            if not is_calendar_query and mentions_month and has_context_calendar:
+                is_calendar_query = True
+                calendar_intent = context["calendar_intent"]  # Usar el intent del contexto anterior
+                logger.info(f"Consulta de calendario detectada por mes con contexto: {calendar_intent}")
+        
+        if is_calendar_query and calendar_intent:
+            calendar_response = get_calendar_events(self.calendar_service, calendar_intent)
+            
+            # Detectar referencia temporal para guardar en el contexto
+            time_reference = None
+            if "esta semana" in query_lower:
+                time_reference = "esta semana"
+            elif "este mes" in query_lower:
+                time_reference = "este mes"
+            elif "próximos" in query_lower or "proximos" in query_lower:
+                time_reference = "próximos eventos"
+            
+            # Actualizar contexto
+            session_service.update_session_context(
+                user_id, query_original, f"calendario_{calendar_intent}",
+                calendar_intent=calendar_intent,
+                time_reference=time_reference
+            )
+            
             self.update_user_history(user_id, query_original, calendar_response)
             return {
                 "query": query_original,

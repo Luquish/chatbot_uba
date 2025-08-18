@@ -339,7 +339,11 @@ def handle_sheet_course_query(query: str, sheets_service: SheetsService,
             return f"No encontré detalles para el curso '{target_course_name}' en la hoja. Verifica el nombre o consulta la página oficial."
 
     # Si es una consulta general sobre cursos (sin especificar uno)
-    if any(keyword in query_lower for keyword in SHEET_COURSE_KEYWORDS if keyword not in specific_course_keywords):
+    # O si menciona un mes directamente (consulta contextual)
+    mentions_month = any(month in query_lower for month in months_es.keys())
+    has_course_keywords = any(keyword in query_lower for keyword in SHEET_COURSE_KEYWORDS if keyword not in specific_course_keywords)
+    
+    if has_course_keywords or mentions_month:
         # Mostrar los cursos más próximos primero
         sorted_courses = sort_courses_by_proximity(parsed_courses, date_utils)
         response_intro = f"{random.choice(information_emojis)} Sobre los cursos en la hoja '{sheet_name_to_query}', esto es lo que tengo próximamente:\n"
