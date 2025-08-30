@@ -51,4 +51,4 @@ notebooks/
 # Scripts de preprocesamiento (no necesarios en producción)
 scripts/preprocess.py
 scripts/create_embeddings.py
-scripts/train_finetune.py 
+
