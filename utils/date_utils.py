@@ -50,6 +50,15 @@ class DateUtils:
             datetime.date: Fecha actual
         """
         return datetime.date.today()
+    
+    def get_current_date(self) -> datetime.date:
+        """
+        Alias para get_today() por compatibilidad.
+        
+        Returns:
+            datetime.date: Fecha actual
+        """
+        return self.get_today()
 
     def get_current_weekday(self) -> int:
         """
@@ -135,9 +144,12 @@ class DateUtils:
         else:
             return f"{start_date.day} de {months_es[start_date.month]} de {start_date.year} al {end_date.day} de {months_es[end_date.month]} de {end_date.year}"
 
-    def get_current_month_name(self) -> str:
+    def get_current_month_name(self, date: datetime.date = None) -> str:
         """
         Obtiene el nombre del mes actual en español y en mayúsculas.
+        
+        Args:
+            date: Fecha específica, si no se proporciona usa la fecha actual
         
         Returns:
             str: Nombre del mes actual (ej: "AGOSTO", "SEPTIEMBRE")
@@ -148,8 +160,66 @@ class DateUtils:
             9: 'SEPTIEMBRE', 10: 'OCTUBRE', 11: 'NOVIEMBRE', 12: 'DICIEMBRE'
         }
         
-        today = self.get_today()
-        return months_es[today.month]
+        target_date = date if date else self.get_today()
+        return months_es[target_date.month]
+    
+    def get_next_month_name(self, date: datetime.date = None) -> str:
+        """
+        Obtiene el nombre del próximo mes en español.
+        
+        Args:
+            date: Fecha base, si no se proporciona usa la fecha actual
+            
+        Returns:
+            str: Nombre del próximo mes (ej: "septiembre", "octubre")
+        """
+        months_es = {
+            1: 'enero', 2: 'febrero', 3: 'marzo', 4: 'abril',
+            5: 'mayo', 6: 'junio', 7: 'julio', 8: 'agosto',
+            9: 'septiembre', 10: 'octubre', 11: 'noviembre', 12: 'diciembre'
+        }
+        
+        target_date = date if date else self.get_today()
+        next_month = target_date.month + 1
+        next_year = target_date.year
+        
+        if next_month > 12:
+            next_month = 1
+            next_year += 1
+            
+        return months_es[next_month]
+
+    # Nuevos helpers de normalización
+    @staticmethod
+    def month_name_to_num(name: str) -> Optional[int]:
+        name = (name or "").strip().lower()
+        months_es_to_num = {
+            'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
+            'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
+            'septiembre': 9, 'octubre': 10, 'noviembre': 11, 'diciembre': 12
+        }
+        return months_es_to_num.get(name)
+
+    @staticmethod
+    def num_to_month_name(num: int, uppercase: bool = False) -> str:
+        months_es = {
+            1: 'enero', 2: 'febrero', 3: 'marzo', 4: 'abril',
+            5: 'mayo', 6: 'junio', 7: 'julio', 8: 'agosto',
+            9: 'septiembre', 10: 'octubre', 11: 'noviembre', 12: 'diciembre'
+        }
+        name = months_es.get(num, '')
+        return name.upper() if uppercase else name
+
+    @staticmethod
+    def detect_month_from_text(text: str) -> Optional[str]:
+        """
+        Devuelve el nombre de mes (minúsculas) si aparece en el texto.
+        """
+        text = (text or "").lower()
+        for m in ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']:
+            if m in text:
+                return m
+        return None
 
     def parse_date_from_text(self, text: str) -> Optional[datetime.date]:
         """
@@ -331,6 +401,19 @@ class DateUtils:
             9: 'septiembre', 10: 'octubre', 11: 'noviembre', 12: 'diciembre'
         }
         return f"{date.day} de {months_es[date.month]} de {date.year}"
+
+    @staticmethod
+    def get_weekday_abbr(name: str) -> str:
+        """
+        Devuelve abreviatura en español para un nombre de día (ej.: miércoles→mié).
+        Acepta variantes sin tilde.
+        """
+        name = (name or '').lower()
+        mapping = {
+            'lunes': 'lun', 'martes': 'mar', 'miércoles': 'mié', 'miercoles': 'mié',
+            'jueves': 'jue', 'viernes': 'vie', 'sábado': 'sáb', 'sabado': 'sáb', 'domingo': 'dom'
+        }
+        return mapping.get(name, '')
 
     def format_date_for_api(self, date: datetime.date) -> str:
         """

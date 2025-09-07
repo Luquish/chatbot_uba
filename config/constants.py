@@ -210,73 +210,16 @@ warning_emojis = ["⚠️", "❗", "⚡", "🚨"]
 success_emojis = ["✅", "💫", "🎉", "💡"]
 medical_emojis = ["🏥", "👨‍⚕️", "👩‍⚕️", "🩺"]
 
-# Configuraciones específicas para consultas de calendario
+# Configuraciones específicas para consultas de calendario (unificado)
 CALENDAR_INTENT_MAPPING = {
     'eventos_generales': {
-        'keywords': ['eventos', 'evento', 'próximos', 'proximos', 'próximo', 'proximo', 'esta semana', 'este mes', 'cuáles son', 'cuales son', 'qué hay', 'que hay'],
-        'tool': 'get_events_this_week',
-        'params': {},
-        'no_events_message': 'No hay eventos programados para este período.'
-    },
-    'examenes': {
-        'keywords': ['examen', 'examenes', 'parcial', 'parciales', 'final', 'finales', 'evaluación'],
-        'tool': 'get_events_by_type',
-        'params': {'calendar_type': 'examenes'},
-        'no_events_message': 'No hay exámenes programados en este momento.'
-    },
-    'inscripciones': {
-        'keywords': ['inscripción', 'inscripciones', 'inscribir', 'anotar', 'anotarse', 'reasignación'],
-        'tool': 'get_events_by_type',
-        'params': {'calendar_type': 'inscripciones'},
-        'no_events_message': 'No hay eventos de inscripción programados en este momento.'
-    },
-    'cursada': {
-        'keywords': ['cursada', 'cursadas', 'cuatrimestre', 'inicio', 'fin', 'final', 'comienzo', 'fin de cursada', 'vacaciones'],
-        'tool': 'get_events_by_type',
-        'params': {'calendar_type': 'cursada'},
-        'no_events_message': 'No hay información sobre cursadas en este momento.'
-    },
-    'tramites': {
-        'keywords': ['trámite', 'tramite', 'trámites', 'tramites', 'documentación', 'documentacion', 'administrativo'],
-        'tool': 'get_events_by_type',
-        'params': {'calendar_type': 'tramites'},
-        'no_events_message': 'No hay trámites programados en este momento.'
+        'keywords': [
+            'eventos', 'evento', 'actividad', 'actividades',
+            'próximos', 'proximos', 'próximo', 'proximo', 'próxima', 'proxima', 'próximas', 'proximas',
+            'esta semana', 'este mes', 'cuáles son', 'cuales son', 'qué hay', 'que hay',
+            'examen', 'examenes', 'parcial', 'parciales', 'final', 'finales', 'inscripción', 'inscripciones', 'inscribir', 'anotar', 'anotarse'
+        ]
     }
-}
-
-CALENDAR_MESSAGES = {
-    'NO_EVENTS': 'No encontré eventos programados para ese período en el calendario académico.',
-    'ERROR_FETCH': 'Lo siento, no pude acceder al calendario académico en este momento. Por favor, intentá más tarde. Mientras tanto te podes comunicar con @cecim.nemed por instagram',
-    'MULTIPLE_EVENTS': 'Encontré varios eventos que coinciden con tu búsqueda:',
-    'NO_SPECIFIC_EVENT': 'No encontré eventos específicos que coincidan con tu búsqueda en el calendario.',
-    'PAST_EVENT': 'Ese evento ya pasó. ¿Querés que te muestre los próximos eventos similares?'
-}
-
-CALENDAR_SEARCH_CONFIG = {
-    'MAX_RESULTS': 5,  # Número máximo de resultados a devolver
-    'DEFAULT_TIMESPAN': 30,  # Días hacia adelante por defecto
-    'MAX_TIMESPAN': 180,  # Máximo número de días hacia adelante para buscar
-    'TIME_MIN': 'now',  # Comenzar búsqueda desde ahora
-    'TIME_ZONE': 'America/Argentina/Buenos_Aires'  # Zona horaria para las consultas
-}
-
-# Palabras clave para expansión de consultas
-QUERY_EXPANSIONS = {
-    'inscripcion': ['inscribir', 'anotarse', 'anotar', 'registrar', 'inscripto'],
-    'constancia': ['certificado', 'comprobante', 'papel', 'documento'],
-    'regular': ['regularidad', 'condición', 'estado', 'situación'],
-    'final': ['examen', 'evaluación', 'rendir', 'dar'],
-    'recursada': ['recursar', 'volver a cursar', 'segunda vez'],
-    'correlativa': ['correlatividad', 'requisito', 'necesito', 'puedo cursar'],
-    'baja': ['dar de baja', 'abandonar', 'dejar', 'salir'],
-    # Nuevas expansiones
-    'denuncia': ['denuncia', 'queja', 'reclamo', 'reportar', 'irregularidad', 'problema', 'presentar', 'acusar'],
-    'procedimiento': ['procedimiento', 'proceso', 'pasos', 'cómo', 'manera', 'forma', 'metodología', 'trámite'],
-    'sancion': ['sanción', 'sanciones', 'castigo', 'penalidad', 'disciplina', 'apercibimiento', 'suspensión'],
-    'sumario': ['sumario', 'investigación', 'proceso disciplinario', 'expediente'],
-    'readmision': ['readmisión', 'readmitir', 'volver', 'reincorporación', 'reintegro'],
-    'aprobacion': ['aprobar', 'aprobación', 'pasar materias', 'materias aprobadas', 'requisitos'],
-    'suspension': ['suspensión', 'suspender', 'interrumpir', 'detener estudios', 'temporalmente']
 }
 
 # CONFIGURACIÓN PARA GOOGLE SHEETS (CURSOS)
@@ -298,8 +241,8 @@ SHEET_QUERY_CONFIG = {
 
 # Palabras clave para detectar consultas sobre los cursos
 SHEET_COURSE_KEYWORDS = [
-    'curso', 'cursos', 'actividad',
+    'curso', 'cursos',
     'horario de curso', 'formulario de curso', 'inscripción a curso',
     'suturas', 'rcp', 'primeros auxilios', 'vacunación',
     'link para anotarme', 'anotarme al curso de'
-] 
+]

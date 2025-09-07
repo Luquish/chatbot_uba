@@ -35,23 +35,23 @@ class BaseTest:
         
     def log_info(self, message: str):
         """Log de información."""
-        print(f"   ℹ️ {message}")
+        logging.info(f"   ℹ️ {message}")
         
     def log_success(self, message: str):
         """Log de éxito."""
-        print(f"   ✅ {message}")
+        logging.info(f"   ✅ {message}")
         
     def log_warning(self, message: str):
         """Log de advertencia."""
-        print(f"   ⚠️ {message}")
+        logging.warning(f"   ⚠️ {message}")
         
     def log_error(self, message: str):
         """Log de error."""
-        print(f"   ❌ {message}")
+        logging.error(f"   ❌ {message}")
         
     def log_step(self, message: str):
         """Log de paso."""
-        print(f"   🔧 {message}")
+        logging.info(f"   🔧 {message}")
         
     def run_test(self) -> Dict[str, Any]:
         """

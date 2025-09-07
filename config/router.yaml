@@ -1,0 +1,81 @@
+tools:
+  - name: conversational
+    priority: 85
+    triggers:
+      keywords: ["hola", "buenas", "buenos dias", "buen dia", "que tal", "como estas", "gracias", "quien eres", "como te llamas", "que puedes hacer", "que podes hacer"]
+    thresholds:
+      accept: 0.5
+
+  - name: calendar
+    priority: 70
+    triggers:
+      keywords: ["evento", "eventos", "actividad", "actividades", "examen", "parcial", "final", "inscripción", "inscripcion", "semana", "mes", "próximas", "proximas"]
+    thresholds:
+      accept: 0.65
+
+  - name: faq
+    priority: 80
+    triggers:
+      keywords: ["cómo tramitar", "como tramitar", "requisitos", "documentación", "documentacion", "dónde", "donde"]
+    thresholds:
+      accept: 0.7
+
+  - name: sheets.cursos
+    priority: 60
+    triggers:
+      keywords: ["curso", "cursada", "horario", "clase", "clases"]
+    spreadsheet_id: "ENV:CURSOS_SPREADSHEET_ID"
+    thresholds:
+      accept: 0.6
+
+  - name: sheets.horarios_catedra
+    priority: 65
+    triggers:
+      keywords: ["horario", "cátedra", "catedra", "materia", "secretaría", "secretaria", "sector", "piso", "mail"]
+    thresholds:
+      accept: 0.62
+    spreadsheet_id: "1xPT3mTqDNTsRjhM65vbI7SyLSVBbUkeE4VLH09HTywk"
+    sheet_name: "Hoja 1"
+    ranges:
+      default: "A:M"
+
+  - name: sheets.horarios_lic_tec
+    priority: 63
+    triggers:
+      keywords: ["licenciatura", "tecnicatura", "lic", "tec", "kinesiologia", "fonoaudiologia", "nutricion", "enfermeria", "obstetricia", "bioimagenes", "podologia", "anestesia", "cosmetologia", "hemoterapia", "instrumentacion", "practicas cardiologicas", "atencion", "ubicacion", "contacto"]
+    thresholds:
+      accept: 0.6
+    spreadsheet_id: "1Byu1Xqxrx-UCM9_18p0cWppOwNzTWn4DHt0R249kiuY"
+    sheet_name: "Hoja 1"
+    ranges:
+      default: "A:D"
+
+  - name: sheets.horarios_secretarias
+    priority: 64
+    triggers:
+      keywords: ["secretaria", "secretaría", "alumnos", "admisión", "admision", "tesoreria", "tesorería", "kinesiologia", "obstetricia", "hemoterapia", "podologia", "radiologia", "naon", "archivos", "actas", "pases", "discapacidad", "genero", "género", "seube", "ubicacion", "piso", "horario", "mail"]
+    thresholds:
+      accept: 0.6
+    spreadsheet_id: "1GyKQXDdujbnAhfnWehcd8W9_jKzErlVmYhRHAvOV83U"
+    sheet_name: "Hoja 1"
+    ranges:
+      default: "A:J"
+
+  - name: sheets.mails_nuevo_espacio
+    priority: 62
+    triggers:
+      keywords: ["voluntariado", "imprimir", "impresion", "impresiones", "histoteca", "readmision", "reincorporacion", "recursada", "prorroga", "prórroga", "nuevo espacio", "contacto"]
+    thresholds:
+      accept: 0.6
+    spreadsheet_id: "1R5arCJAolOcMIAEBydTnIMi2boIagw4qyaI2UlC-eb0"
+    sheet_name: "Hoja 1"
+    ranges:
+      default: "A:A"
+
+  - name: rag
+    priority: 10
+    thresholds:
+      accept: 0.0
+    k: 5
+
+

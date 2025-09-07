@@ -4,15 +4,20 @@ Manejador para consultas sobre el calendario académico.
 import logging
 import random
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 
-from config.constants import CALENDAR_INTENT_MAPPING, CALENDAR_MESSAGES
 from config.constants import information_emojis
 from services.calendar_service import CalendarService
 
 logger = logging.getLogger(__name__)
 
 
-def get_calendar_events(calendar_service: CalendarService, calendar_intent: str = None) -> str:
+def get_calendar_events(
+    calendar_service: CalendarService,
+    calendar_intent: str = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> str:
     """
     Obtiene y formatea los eventos del calendario según la intención.
     
@@ -27,30 +32,16 @@ def get_calendar_events(calendar_service: CalendarService, calendar_intent: str 
         return "Lo siento, el servicio de calendario no está disponible en este momento."
             
     try:
-        events = []
-        
-        # Si hay una intención específica, usar el método correspondiente
-        if calendar_intent and calendar_intent in CALENDAR_INTENT_MAPPING:
-            intent_config = CALENDAR_INTENT_MAPPING[calendar_intent]
-            tool = intent_config['tool']
-            
-            if tool == 'get_events_by_type':
-                calendar_type = intent_config['params']['calendar_type']
-                events = calendar_service.get_events_by_type(calendar_type)
-            elif tool == 'get_events_this_week':
-                events = calendar_service.get_events_this_week()
-            elif tool == 'get_events_by_date_range':
-                # Implementar lógica para rango de fechas si es necesario
-                events = calendar_service.get_events_by_date_range()
-            elif tool == 'get_upcoming_events':
-                events = calendar_service.get_upcoming_events()
+        # Estrategia:
+        # - Si se pasa un rango explícito, usarlo
+        # - Si no hay intención, usar "esta semana"
+        # - Si hay intención sin rango, usar próximos eventos
+        if start_date and end_date:
+            events = calendar_service.get_events_by_date_range(start_date, end_date)
         else:
-            # Si no hay intención específica, mostrar eventos de la semana
-            events = calendar_service.get_events_this_week()
+            events = calendar_service.get_events_this_week() if not calendar_intent else calendar_service.get_upcoming_events()
         
         if not events:
-            if calendar_intent and calendar_intent in CALENDAR_INTENT_MAPPING:
-                return CALENDAR_INTENT_MAPPING[calendar_intent]['no_events_message']
             return "No encontré eventos programados para este período."
             
         # Formatear respuesta
@@ -60,15 +51,8 @@ def get_calendar_events(calendar_service: CalendarService, calendar_intent: str 
             summary = event['summary']
             start = event['start']
             is_same_day = event.get('same_day', False)
-            event_type = event.get('calendar_type', 'general')
-            
-            # Emoji según tipo de evento
-            event_emoji = {
-                'examenes': '📝',
-                'inscripciones': '✍️',
-                'cursada': '📚',
-                'tramites': '📋'
-            }.get(event_type, '📌')
+            event_type = event.get('calendar_type', 'actividades_cecim')
+            event_emoji = '📌'
             
             event_str = f"\n{event_emoji} {summary}"
             

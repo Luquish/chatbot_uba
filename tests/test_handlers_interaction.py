@@ -49,6 +49,7 @@ class TestHandlersInteraction(BaseTest):
             results.append(self._test_calendar_handler())
             results.append(self._test_courses_handler())
             results.append(self._test_intent_handler())
+            results.append(self._test_router_metrics())
             results.append(self._test_telegram_handler())
             
             successful_tests = sum(results)
@@ -135,35 +136,33 @@ class TestHandlersInteraction(BaseTest):
             # Mock del CalendarService
             mock_calendar_service = Mock(spec=CalendarService)
             
-            # Mock de eventos de prueba
+            # Mock de eventos de prueba (unificado)
             mock_events = [
                 {
-                    'summary': 'Examen Final Anatomía',
-                    'start': '15/12/2024 09:00',
-                    'end': '15/12/2024 12:00',
+                    'summary': 'Paralelo Anato',
+                    'start': 'Lunes 25 de 20:00 hs a 22:00 hs',
+                    'end': None,
                     'same_day': True,
-                    'calendar_type': 'examenes',
-                    'description': 'Examen final de anatomía'
+                    'calendar_type': 'actividades_cecim',
+                    'description': 'Actividad de anatomía'
                 },
                 {
-                    'summary': 'Inscripción a Finales',
-                    'start': '01/11/2024',
-                    'end': '10/11/2024',
-                    'same_day': False,
-                    'calendar_type': 'inscripciones'
+                    'summary': 'Curso RCP',
+                    'start': 'Viernes 29 de 15:00 hs a 17:00 hs',
+                    'end': None,
+                    'same_day': True,
+                    'calendar_type': 'actividades_cecim'
                 }
             ]
             
             # Configurar mocks
             mock_calendar_service.get_events_this_week.return_value = mock_events
-            mock_calendar_service.get_events_by_type.return_value = mock_events
             mock_calendar_service.get_upcoming_events.return_value = mock_events
             
             # Test casos
             test_cases = [
                 {'intent': None, 'expected_events': 2},
-                {'intent': 'examenes', 'expected_events': 2},
-                {'intent': 'inscripciones', 'expected_events': 2}
+                {'intent': 'cualquiera', 'expected_events': 2}
             ]
             
             successful_cases = 0
@@ -407,6 +406,32 @@ class TestHandlersInteraction(BaseTest):
             
         except Exception as e:
             print(f"  ❌ Error en Telegram Handler: {str(e)}")
+            return False
+
+    def _test_router_metrics(self) -> bool:
+        """Test básico de métricas de enrutamiento e intents."""
+        print("\n📈 Probando métricas de Router/Intents...")
+        try:
+            from services.metrics_service import metrics_service
+            from rag_system import RAGSystem
+            metrics_service.reset()
+
+            rag = RAGSystem()
+            # Fuerza algunas rutas
+            rag.process_query("hola", user_id="m1")           # conversational
+            rag.process_query("¿Qué actividades hay esta semana?", user_id="m2")  # calendar
+            rag.process_query("¿Hay cursos de suturas?", user_id="m3")            # sheets
+
+            stats = metrics_service.get_stats()
+            print(f"   🔢 Stats: {stats}")
+            ok = (
+                stats.get('total_queries', 0) >= 3 and
+                stats.get('tool_counts', {}).get('conversational', 0) >= 1 and
+                (stats.get('tool_counts', {}).get('calendar', 0) >= 1 or stats.get('tool_counts', {}).get('sheets.cursos', 0) >= 1)
+            )
+            return ok
+        except Exception as e:
+            print(f"  ❌ Error en métricas: {str(e)}")
             return False
 
 

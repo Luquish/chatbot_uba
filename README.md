@@ -10,9 +10,23 @@ Este proyecto implementa un asistente virtual para cualquier facultad de la UBA 
 
 - **Sistema RAG**: Generación Aumentada por Recuperación que combina recuperación de información y generación de respuestas contextuales.
 - **Integración Telegram**: Conexión directa con la API de Telegram Bot para enviar y recibir mensajes.
-- **Sistema de Intenciones**: Clasificación semántica de consultas para personalizar las respuestas según el tipo de pregunta.
+- **Sistema de Intenciones**: Router declarativo por YAML + herramientas (tools). El LLM elige tool (conversational, calendario, sheets, FAQs, RAG) y hay reglas mínimas como respaldo.
 - **Almacenamiento Híbrido**: Carga embeddings desde Google Cloud Storage con fallback local.
 - **Integración con Google APIs**: Calendario y Sheets para información dinámica.
+
+### Sesiones y Contexto Conversacional
+- Sesiones en memoria con TTL configurable (30 min por defecto).
+- Soporta consultas relativas: “y la que sigue?” usa el contexto previo (semana/mes) para responder.
+- `SessionService` limpia sesiones expiradas automáticamente y guarda metadatos útiles (tipo de consulta, intención de calendario, mes consultado, user_name).
+
+#### Configuración de sesiones efímeras
+- `SESSION_TTL_SECONDS`: tiempo de vida de la sesión en segundos (default: 1800 = 30 min)
+- `SESSION_SWEEPER_INTERVAL`: intervalo del limpiador en segundos (default: 60)
+- El limpiador corre en segundo plano y se detiene automáticamente en el evento de apagado del servidor.
+
+### Métricas y Enrutamiento
+- Logs de router: tool ejecutada, score y fallback si ninguna produce respuesta.
+- YAML (`config/router.yaml`) para ajustar prioridades, triggers y umbrales sin tocar código.
 
 ### Flujo del Sistema
 
@@ -42,8 +56,8 @@ chatbot_uba/                     # Backend del chatbot
 ├── services/                  # Servicios externos (Calendar, Sheets)
 ├── utils/                     # Utilidades del sistema
 └── scripts/
-    ├── run_rag.py            # Testing del RAG
-    └── gcs_storage.py        # Integración con GCS
+    ├── setup_database.py     # Inicializa tablas e índices en PostgreSQL
+    └── logs/                 # Logs de scripts
 ```
 
 ## Configuración
@@ -93,6 +107,13 @@ CURSOS_SPREADSHEET_ID=your-spreadsheet-id
 ENVIRONMENT=development
 HOST=0.0.0.0
 PORT=8080
+
+# Sesiones efímeras (opcional)
+SESSION_TTL_SECONDS=1800
+SESSION_SWEEPER_INTERVAL=60
+
+# Métricas (opcional)
+METRICS_API_KEY=coloca-un-token-seguro
 ```
 
 ## Despliegue
@@ -129,30 +150,13 @@ Para producción pura (sin volúmenes):
 docker-compose -f docker-compose.yml up -d
 ```
 
-### Streamlit Cloud
+### Endpoints útiles y métricas
 
-#### 🔐 Google Cloud Secret Manager
+- `GET /health`: estado del servicio. Incluye `session_stats` (sesiones activas, TTL) y `router_metrics`.
+- `GET /metrics`: requiere header `X-API-Key` con `METRICS_API_KEY` definido en `.env`.
+- Webhook de Telegram: `POST /webhook/telegram`.
 
-**Respuesta a tu pregunta**: **SÍ, el repo de Streamlit necesita las credenciales** porque:
-
-1. **Streamlit sube archivos** al bucket usando `gcs_service.py`
-2. **Cloud Functions procesan** los archivos del bucket
-3. **Ambos necesitan acceso** a Google Cloud Storage
-
-**Para configurar las credenciales**:
-
-```bash
-# Usar el script existente en cloud_functions
-cd cloud_functions/utils
-python3 migrate_secrets.py --project-id drcecim-465823
-```
-
-**Para Streamlit Cloud específicamente**:
-- Las credenciales se configuran como variables de entorno
-- No se pueden usar archivos locales
-- Se recomienda usar Google Secret Manager para gestión centralizada
-
-**Nota**: El script `migrate_secrets.py` ya existe en `cloud_functions/utils/` y maneja la migración a Google Secret Manager.
+Apagado limpio: el servicio detiene el limpiador de sesiones para evitar hilos colgando.
 
 ## Arquitectura del Sistema
 
@@ -200,7 +204,19 @@ El sistema incluye una carpeta `data/embeddings/` como fallback:
 
 - **Logs**: Disponibles en `logs/`
 - **Health check**: `http://localhost:8080/health`
-- **Métricas**: Logs detallados del sistema RAG
+- **Métricas**: usar `GET /metrics` con header `X-API-Key: $METRICS_API_KEY`
+
+## Testing rápido
+
+- Sesiones (TTL y relativas):
+```bash
+python tests/test_sessions.py
+```
+
+- Suite completa (requiere servicios externos configurados):
+```bash
+python tests/run_tests.py
+```
 
 ## Requisitos
 

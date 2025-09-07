@@ -30,18 +30,18 @@ class TestRAGSimulation(AsyncBaseTest):
                 "expected_topics": ["denuncia", "procedimiento", "administrativo"]
             },
             {
-                "message": "¿Cuándo son los exámenes finales?",
+                "message": "¿Qué actividades hay esta semana?",
                 "user_id": "987654321", 
                 "user_name": "María González",
                 "chat_id": "987654321",
-                "expected_topics": ["examen", "final", "calendario"]
+                "expected_topics": ["eventos", "actividades", "semana"]
             },
             {
-                "message": "¿Qué materias puedo cursar este cuatrimestre?",
+                "message": "Mostrame las próximas actividades",
                 "user_id": "456789123",
                 "user_name": "Juan Pérez", 
                 "chat_id": "456789123",
-                "expected_topics": ["materias", "cursada", "cuatrimestre"]
+                "expected_topics": ["eventos", "actividades", "próximos"]
             }
         ]
         

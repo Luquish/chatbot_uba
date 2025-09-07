@@ -4,11 +4,10 @@ Test de integración de Telegram Bot API.
 Valida el handler y envío de mensajes.
 """
 
-import asyncio
-from base_test import BaseTest
+from base_test import AsyncBaseTest
 
 
-class TestTelegram(BaseTest):
+class TestTelegram(AsyncBaseTest):
     """Test de integración de Telegram."""
     
     def get_test_description(self) -> str:
@@ -17,7 +16,7 @@ class TestTelegram(BaseTest):
     def get_test_category(self) -> str:
         return "telegram"
     
-    def _run_test_logic(self) -> bool:
+    async def _run_test_logic(self) -> bool:
         """Validar integración de Telegram."""
         print("🤖 Probando integración completa de Telegram...")
         
@@ -30,13 +29,11 @@ class TestTelegram(BaseTest):
                 return False
             
             # Inicializar Telegram handler
-            telegram_handler = TelegramHandler(
-                bot_token=self.config.telegram.telegram_bot_token
-            )
+            telegram_handler = TelegramHandler(bot_token=self.config.telegram.telegram_bot_token)
             self.log_success("Telegram handler inicializado")
             
-            # Test de obtención de información del bot (síncrono)
-            bot_info = asyncio.run(telegram_handler.get_me())
+            # Test de obtención de información del bot (async)
+            bot_info = await telegram_handler.get_me()
             if bot_info.get("ok"):
                 bot_data = bot_info.get("result", {})
                 print(f"   Bot ID: {bot_data.get('id')}")
@@ -48,7 +45,7 @@ class TestTelegram(BaseTest):
                 return False
             
             # Test de webhook info
-            webhook_info = asyncio.run(telegram_handler.get_webhook_info())
+            webhook_info = await telegram_handler.get_webhook_info()
             if webhook_info.get("ok"):
                 webhook_data = webhook_info.get("result", {})
                 print(f"   Webhook URL: {webhook_data.get('url', 'No configurado')}")
@@ -60,10 +57,7 @@ class TestTelegram(BaseTest):
             # Test con usuario específico (si está configurado)
             if self.config.telegram.telegram_admin_user_id:
                 test_message = "🧪 Este es un mensaje de prueba del sistema RAG UBA\n\n✅ Test de integración completado exitosamente."
-                test_result = asyncio.run(telegram_handler.send_message(
-                    self.config.telegram.telegram_admin_user_id,
-                    test_message
-                ))
+                test_result = await telegram_handler.send_message(self.config.telegram.telegram_admin_user_id, test_message)
                 
                 if test_result.get('status') == 'success':
                     self.log_success("Mensaje de prueba enviado exitosamente")

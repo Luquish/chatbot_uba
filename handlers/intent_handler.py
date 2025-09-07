@@ -5,7 +5,7 @@ import logging
 import re
 import random
 from typing import Tuple, Dict, List, Optional
-from unidecode import unidecode
+from utils.text_utils import normalize_text
 
 from config.constants import (
     INTENT_EXAMPLES,
@@ -19,22 +19,6 @@ from models.openai_model import OpenAIEmbedding, OpenAIModel
 
 logger = logging.getLogger(__name__)
 
-
-def normalize_text(text: str) -> str:
-    """
-    Normaliza un texto para comparación.
-    
-    Args:
-        text (str): Texto a normalizar
-        
-    Returns:
-        str: Texto normalizado
-    """
-    normalized = text.lower().strip()
-    normalized = unidecode(normalized)  # Eliminar tildes
-    normalized = re.sub(r'[^\w\s]', '', normalized)  # Eliminar signos de puntuación
-    normalized = re.sub(r'\s+', ' ', normalized).strip()  # Normalizar espacios
-    return normalized
 
 
 def normalize_intent_examples(intent_examples: Dict) -> Dict:
@@ -302,7 +286,7 @@ def handle_conversational_intent(
 
     query_lower = query.lower().strip()
 
-    # Saludo simple por palabras clave
+    # Mantener sólo como fallback si Router no capturó la intención conversacional
     if len(query.split()) <= 2 and any(word in query_lower for word in GREETING_WORDS):
         emoji = random.choice(greeting_emojis)
         return {

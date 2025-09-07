@@ -3,46 +3,26 @@ import logging
 import json
 import requests
 from typing import Dict, Any
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, Header
 from dotenv import load_dotenv
-from rag_system import RAGSystem
-from handlers.telegram_handler import TelegramHandler
+from core.app_manager import app_manager
 from services.session_service import session_service
+from services.metrics_service import metrics_service
 import uvicorn
 import re
 
 # Cargar variables de entorno
 load_dotenv()
 
-# Configuración de logging
+# Configuración de logging - usar INFO en producción, DEBUG en desarrollo
+log_level = logging.DEBUG if app_manager.environment == 'development' else logging.INFO
 logging.basicConfig(
-    level=logging.DEBUG,  # Cambiar a DEBUG para ver todos los mensajes
+    level=log_level,
     format='%(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Determinar el entorno (desarrollo o producción)
-ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
-logger.info(f"Iniciando en entorno: {ENVIRONMENT}")
-
-# Configuración de Telegram Bot API
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_WEBHOOK_SECRET = os.getenv('TELEGRAM_WEBHOOK_SECRET')
-TELEGRAM_ADMIN_USER_ID = os.getenv('TELEGRAM_ADMIN_USER_ID')
-
-# Inicialización de variables globales
-rag_system = None
-rag_initialized = False
-
-# Función para obtener el handler de Telegram
-def get_telegram_handler() -> TelegramHandler:
-    if TELEGRAM_BOT_TOKEN:
-        return TelegramHandler(TELEGRAM_BOT_TOKEN)
-    else:
-        raise HTTPException(
-            status_code=503,
-            detail="Integración con Telegram no disponible. Falta TELEGRAM_BOT_TOKEN."
-        )
+logger.info(f"Iniciando en entorno: {app_manager.environment}")
 
 # Inicializar FastAPI
 app = FastAPI(
@@ -86,18 +66,28 @@ async def telegram_webhook_middleware(request: Request, call_next):
 
 @app.on_event("startup")
 async def startup_event():
-    """Inicializa el sistema RAG al iniciar el servidor."""
-    global rag_system, rag_initialized
+    """Inicializa componentes del sistema al iniciar el servidor."""
     try:
-        logger.info("Iniciando sistema RAG...")
+        logger.info("Inicializando componentes del sistema...")
         
-        logger.info("Inicializando sistema RAG con PostgreSQL...")
-        rag_system = RAGSystem()
-        rag_initialized = True
-        logger.info("Sistema RAG inicializado correctamente")
+        # Pre-inicializar sistema RAG para verificar configuración
+        app_manager.get_rag_system()
+        logger.info("✅ Sistema RAG pre-inicializado correctamente")
+        
     except Exception as e:
-        logger.error(f"Error al inicializar sistema RAG: {str(e)}")
-        raise e
+        logger.error(f"❌ Error al inicializar componentes: {str(e)}")
+        # No fallar el startup, permitir que el servidor inicie y maneje errores dinámicamente
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Limpieza en apagado del servicio."""
+    try:
+        # Detener sweeper de sesiones para apagado limpio
+        session_service.stop()
+        logger.info("SessionService detenido correctamente")
+    except Exception as e:
+        logger.warning(f"Error al detener SessionService: {str(e)}")
 
 @app.post("/webhook/telegram")
 async def telegram_webhook(request: Request):
@@ -135,12 +125,12 @@ async def telegram_webhook(request: Request):
         
         logger.info(f"Mensaje recibido de {profile_name} ({user_id}): {message_body}")
         
-        # Verificar que RAG esté inicializado
-        if not rag_initialized:
-            logger.error("Sistema RAG no inicializado")
+        # Verificar que RAG esté disponible
+        if not app_manager.is_rag_ready():
+            logger.error("Sistema RAG no disponible")
             return {
                 "status": "error", 
-                "message": "Sistema RAG no inicializado"
+                "message": "Sistema RAG no disponible"
             }
         
         # Enviar acción de typing
@@ -148,7 +138,7 @@ async def telegram_webhook(request: Request):
         
         try:
             # Procesar con RAG
-            result = rag_system.process_query(
+            result = app_manager.get_rag_system().process_query(
                 message_body, 
                 user_id=user_id,
                 user_name=profile_name
@@ -199,10 +189,10 @@ async def test_telegram():
     logger.info("Endpoint de prueba /test-telegram llamado")
     
     try:
-        if not TELEGRAM_BOT_TOKEN:
+        if not app_manager.is_telegram_ready():
             return {"status": "error", "message": "TELEGRAM_BOT_TOKEN no configurado"}
     
-        telegram_handler = get_telegram_handler()
+        telegram_handler = app_manager.get_telegram_handler()
         
         # Test básico: obtener información del bot
         bot_info = await telegram_handler.get_me()
@@ -281,15 +271,14 @@ async def delete_telegram_webhook():
 async def health_check():
     """Endpoint para verificar el estado del servicio."""
     try:
-        # Verificar sistema RAG
-        rag_status = "initialized" if rag_initialized else "not_initialized"
-        
-        # Verificar Telegram
-        telegram_available = TELEGRAM_BOT_TOKEN is not None
+        # Obtener estado del sistema desde AppManager
+        system_status = app_manager.get_system_status()
+        rag_status = "initialized" if system_status["rag_ready"] else "not_initialized"
+        telegram_available = system_status["telegram_configured"]
         
         status_info = {
             "status": "healthy",
-            "environment": ENVIRONMENT,
+            "environment": system_status["environment"],
             "rag_status": rag_status,
             "telegram_available": telegram_available,
             "database": "PostgreSQL con pgvector"
@@ -297,13 +286,14 @@ async def health_check():
         
         if telegram_available:
             status_info["telegram_config"] = {
-                "bot_token": "configured" if TELEGRAM_BOT_TOKEN else "missing",
-                "webhook_secret": "configured" if TELEGRAM_WEBHOOK_SECRET else "missing",
-                "admin_user_id": "configured" if TELEGRAM_ADMIN_USER_ID else "missing"
+                "bot_token": "configured" if app_manager.telegram_bot_token else "missing",
+                "webhook_secret": "configured" if app_manager.telegram_webhook_secret else "missing",
+                "admin_user_id": "configured" if app_manager.telegram_admin_user_id else "missing"
             }
         
         # Añadir estadísticas de sesiones
         status_info["session_stats"] = session_service.get_session_stats()
+        status_info["router_metrics"] = metrics_service.get_stats()
         
         return status_info
         
@@ -325,10 +315,9 @@ async def chat_endpoint(message: Dict[str, str]):
         
         # Procesar la consulta con el sistema RAG
         try:
-            # Usar la instancia global de RAG si existe
-            global rag_system
-            if not rag_initialized:
-                logger.error("Sistema RAG no inicializado")
+            # Verificar disponibilidad del sistema RAG
+            if not app_manager.is_rag_ready():
+                logger.error("Sistema RAG no disponible")
                 return {
                     "query": query,
                     "response": "Lo siento, el sistema está en mantenimiento. Por favor, intenta más tarde.",
@@ -337,7 +326,7 @@ async def chat_endpoint(message: Dict[str, str]):
                 }
             
             # Obtener respuesta del sistema RAG
-            response = rag_system.process_query(query)
+            response = app_manager.get_rag_system().process_query(query)
             
             # Verificar si se encontraron chunks relevantes
             if not response.get('relevant_chunks'):
@@ -401,6 +390,16 @@ async def test_webhook():
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/test-telegram", status_code=302)
 
+@app.get("/metrics")
+async def get_metrics(x_api_key: str = Header(default=None)):
+    """Métricas JSON protegidas por X-API-Key (env METRICS_API_KEY)."""
+    api_key = os.getenv('METRICS_API_KEY')
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Métricas no habilitadas")
+    if not x_api_key or x_api_key != api_key:
+        raise HTTPException(status_code=403, detail="No autorizado")
+    return metrics_service.get_stats()
+
 def main():
     """Función principal para ejecutar el servidor."""
     try:
@@ -412,13 +411,13 @@ def main():
         port = int(os.getenv('PORT', 8080))
         
         logger.info(f"Iniciando servidor en {host}:{port}")
-        logger.info(f"Entorno: {ENVIRONMENT}")
+        logger.info(f"Entorno: {app_manager.environment}")
         logger.info("Sistema configurado para usar PostgreSQL con pgvector")
         logger.info(f"GCS Bucket: {os.getenv('GCS_BUCKET_NAME', 'No configurado')}")
-        logger.info(f"Telegram disponible: {bool(TELEGRAM_BOT_TOKEN)}")
+        logger.info(f"Telegram disponible: {app_manager.is_telegram_ready()}")
         
         # Iniciar servidor
-        uvicorn.run("main:app", host=host, port=port, reload=(ENVIRONMENT == 'development'))
+        uvicorn.run("main:app", host=host, port=port, reload=(app_manager.environment == 'development'))
     except Exception as e:
         logger.error(f"Error al iniciar servidor: {str(e)}")
         raise e

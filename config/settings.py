@@ -162,6 +162,16 @@ class SystemSettings(BaseSettings):
         return v
 
 
+class SessionSettings(BaseSettings):
+    """Configuración de sesiones conversacionales efímeras."""
+    
+    ttl_seconds: int = Field(default=1800, env='SESSION_TTL_SECONDS')  # 30 minutos
+    sweeper_interval_seconds: int = Field(default=60, env='SESSION_SWEEPER_INTERVAL')  # 1 minuto
+    
+    class Config:
+        env_prefix = ''
+
+
 class ChatbotConfig(BaseSettings):
     """Configuración principal del chatbot que agrupa todas las configuraciones."""
     
@@ -174,6 +184,7 @@ class ChatbotConfig(BaseSettings):
     google_apis: GoogleApisSettings = GoogleApisSettings()
     server: ServerSettings = ServerSettings()
     system: SystemSettings = SystemSettings()
+    session: SessionSettings = SessionSettings()
     cloudsql: CloudSQLSettings = CloudSQLSettings()
     
     class Config:

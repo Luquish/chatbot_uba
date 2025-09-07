@@ -7,8 +7,15 @@ Ejecuta tests modulares y genera reporte de resultados.
 import asyncio
 import sys
 import time
+import logging
 from typing import Dict, List, Any
 from pathlib import Path
+
+# Configurar logging para tests
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s'
+)
 
 # Importar todos los tests
 from test_config import TestConfig
@@ -19,8 +26,10 @@ from test_chatbot_interaction import TestChatbotInteraction
 from test_handlers_interaction import TestHandlersInteraction
 from test_telegram import TestTelegram
 from test_google_services import TestGoogleServices
+from test_sheets_tools import TestSheetsTools
 from test_http_endpoints import TestHttpEndpoints
-from test_simulation import TestSimulation
+# Ajustar import al nombre correcto del test de simulación
+from test_simulation import TestRAGSimulation as TestSimulation
 
 
 class TestRunner:
@@ -37,6 +46,7 @@ class TestRunner:
             TestHandlersInteraction(),
             TestTelegram(),
             TestGoogleServices(),
+            TestSheetsTools(),
             TestHttpEndpoints(),
             TestSimulation()
         ]
@@ -44,24 +54,24 @@ class TestRunner:
         
     def print_header(self):
         """Imprimir encabezado del test."""
-        print("🚀 INICIANDO VALIDACIÓN PRE-PRODUCCIÓN DEL CHATBOT UBA")
-        print("=" * 80)
-        print("Suite completa de tests para validar que el sistema está listo para producción:")
-        print("- Configuración completa y variables de entorno")
-        print("- Conectividad a todos los servicios externos")
-        print("- Funcionalidad end-to-end de interacciones")
-        print("- Endpoints HTTP críticos")
-        print("- Integraciones con APIs externas")
-        print("=" * 80)
-        print()
+        logging.info("🚀 INICIANDO VALIDACIÓN PRE-PRODUCCIÓN DEL CHATBOT UBA")
+        logging.info("=" * 80)
+        logging.info("Suite completa de tests para validar que el sistema está listo para producción:")
+        logging.info("- Configuración completa y variables de entorno")
+        logging.info("- Conectividad a todos los servicios externos")
+        logging.info("- Funcionalidad end-to-end de interacciones")
+        logging.info("- Endpoints HTTP críticos")
+        logging.info("- Integraciones con APIs externas")
+        logging.info("=" * 80)
+        logging.info("")
     
     async def run_all_tests(self) -> List[Dict[str, Any]]:
         """Ejecutar todos los tests y retornar resultados."""
         results = []
         
         for i, test in enumerate(self.tests, 1):
-            print(f"📋 Test {i}/{len(self.tests)}: {test.get_test_description()}")
-            print("-" * 60)
+            logging.info(f"📋 Test {i}/{len(self.tests)}: {test.get_test_description()}")
+            logging.info("-" * 60)
             
             try:
                 if hasattr(test, 'run_test') and asyncio.iscoroutinefunction(test.run_test):
@@ -72,15 +82,15 @@ class TestRunner:
                 results.append(result)
                 
                 if result['passed']:
-                    print(f"✅ {test.__class__.__name__}: PASSED")
+                    logging.info(f"✅ {test.__class__.__name__}: PASSED")
                 else:
-                    print(f"❌ {test.__class__.__name__}: FAILED")
+                    logging.info(f"❌ {test.__class__.__name__}: FAILED")
                     if result['error_message']:
-                        print(f"   Error: {result['error_message']}")
+                        logging.info(f"   Error: {result['error_message']}")
                 
             except Exception as e:
-                print(f"❌ {test.__class__.__name__}: ERROR")
-                print(f"   Error: {str(e)}")
+                logging.info(f"❌ {test.__class__.__name__}: ERROR")
+                logging.info(f"   Error: {str(e)}")
                 results.append({
                     "name": test.__class__.__name__,
                     "passed": False,
@@ -88,7 +98,7 @@ class TestRunner:
                     "details": {}
                 })
             
-            print()
+            logging.info("")
         
         return results
     
@@ -97,17 +107,17 @@ class TestRunner:
         passed = sum(1 for r in results if r['passed'])
         total = len(results)
         
-        print("=" * 80)
-        print("📊 RESUMEN DE VALIDACIÓN PRE-PRODUCCIÓN")
-        print(f"✅ Tests pasados: {passed}/{total}")
-        print(f"❌ Tests fallidos: {total - passed}/{total}")
-        print("=" * 80)
-        print()
+        logging.info("=" * 80)
+        logging.info("📊 RESUMEN DE VALIDACIÓN PRE-PRODUCCIÓN")
+        logging.info(f"✅ Tests pasados: {passed}/{total}")
+        logging.info(f"❌ Tests fallidos: {total - passed}/{total}")
+        logging.info("=" * 80)
+        logging.info("")
         
         # Análisis de readiness
-        print("=" * 80)
-        print("🔍 ANÁLISIS DE READINESS PARA PRODUCCIÓN")
-        print("=" * 80)
+        logging.info("=" * 80)
+        logging.info("🔍 ANÁLISIS DE READINESS PARA PRODUCCIÓN")
+        logging.info("=" * 80)
         
         # Categorizar resultados
         categories = {}
@@ -131,37 +141,37 @@ class TestRunner:
         # Mostrar estado por categoría
         for category, passed in categories.items():
             status = "✅ CONFIGURADO" if passed else "❌ FALTANTE"
-            print(f"{status}: {category.upper()}")
+            logging.info(f"{status}: {category.upper()}")
         
         # Calcular puntuación
         config_score = 100.0 if categories.get('config', False) else 0.0
         functional_score = (passed / total) * 100 if total > 0 else 0.0
         overall_score = (config_score + functional_score) / 2
         
-        print()
-        print("📊 PUNTUACIÓN DE READINESS:")
-        print(f"   - Configuración: {config_score:.1f}%")
-        print(f"   - Tests funcionales: {functional_score:.1f}%")
-        print(f"   - PUNTUACIÓN GENERAL: {overall_score:.1f}%")
-        print()
+        logging.info("")
+        logging.info("📊 PUNTUACIÓN DE READINESS:")
+        logging.info(f"   - Configuración: {config_score:.1f}%")
+        logging.info(f"   - Tests funcionales: {functional_score:.1f}%")
+        logging.info(f"   - PUNTUACIÓN GENERAL: {overall_score:.1f}%")
+        logging.info("")
         
         if overall_score >= 90:
-            print("🎉 ¡SISTEMA LISTO PARA PRODUCCIÓN!")
-            print("📝 Pasos para despliegue:")
-            print("   1. Revisar variables de entorno en Cloud Run")
-            print("   2. Configurar webhook de Telegram en producción")
-            print("   3. Ejecutar: ./deploy.sh")
-            print("   4. Validar endpoints en el entorno de producción")
+            logging.info("🎉 ¡SISTEMA LISTO PARA PRODUCCIÓN!")
+            logging.info("📝 Pasos para despliegue:")
+            logging.info("   1. Revisar variables de entorno en Cloud Run")
+            logging.info("   2. Configurar webhook de Telegram en producción")
+            logging.info("   3. Ejecutar: ./deploy.sh")
+            logging.info("   4. Validar endpoints en el entorno de producción")
         elif overall_score >= 70:
-            print("\n⚠️ SISTEMA PARCIALMENTE LISTO")
-            print("   Algunos componentes necesitan atención antes del despliegue")
-            print("   Revisa los componentes marcados como FALTANTE")
+            logging.info("\n⚠️ SISTEMA PARCIALMENTE LISTO")
+            logging.info("   Algunos componentes necesitan atención antes del despliegue")
+            logging.info("   Revisa los componentes marcados como FALTANTE")
         else:
-            print("\n❌ SISTEMA NO LISTO PARA PRODUCCIÓN")
-            print("   Se requieren correcciones significativas")
-            print("   Configura todos los componentes críticos antes de continuar")
+            logging.info("\n❌ SISTEMA NO LISTO PARA PRODUCCIÓN")
+            logging.info("   Se requieren correcciones significativas")
+            logging.info("   Configura todos los componentes críticos antes de continuar")
         
-        print("=" * 80)
+        logging.info("=" * 80)
     
     async def run_simulation_if_ready(self, results: List[Dict[str, Any]]):
         """Ejecutar simulación si el sistema está listo."""
@@ -169,9 +179,9 @@ class TestRunner:
         total = len(results)
         
         if passed >= total * 0.8:  # Si al menos 80% de tests pasaron
-            print("\n" + "=" * 80)
-            print("💡 SIMULACIÓN DE INTERACCIÓN REAL")
-            print("=" * 80)
+            logging.info("\n" + "=" * 80)
+            logging.info("💡 SIMULACIÓN DE INTERACCIÓN REAL")
+            logging.info("=" * 80)
             
             # Ejecutar simulación
             simulation = TestSimulation()
@@ -193,13 +203,13 @@ class TestRunner:
         total = len(results)
         overall_score = (passed / total) * 100 if total > 0 else 0
         
-        print(f"\n🏁 VALIDACIÓN COMPLETADA en {end_time - start_time:.2f}s")
+        logging.info(f"\n🏁 VALIDACIÓN COMPLETADA en {end_time - start_time:.2f}s")
         if overall_score >= 90:
-            print("✅ RESULTADO: SISTEMA APROBADO PARA PRODUCCIÓN")
+            logging.info("✅ RESULTADO: SISTEMA APROBADO PARA PRODUCCIÓN")
             return True
         else:
-            print("❌ RESULTADO: SISTEMA REQUIERE CORRECCIONES")
-            print("   Revisa los errores anteriores y vuelve a ejecutar")
+            logging.info("❌ RESULTADO: SISTEMA REQUIERE CORRECCIONES")
+            logging.info("   Revisa los errores anteriores y vuelve a ejecutar")
             return False
 
 

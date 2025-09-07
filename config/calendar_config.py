@@ -26,47 +26,22 @@ class CalendarInfo(BaseSettings):
 
 
 class CalendarSettings(BaseSettings):
-    """Configuración de calendarios académicos."""
+    """Configuración de un único calendario de actividades CECIM."""
     
-    # IDs de calendarios desde variables de entorno
-    calendar_id_examenes: Optional[str] = Field(default=None, env='CALENDAR_ID_EXAMENES')
-    calendar_id_inscripciones: Optional[str] = Field(default=None, env='CALENDAR_ID_INSCRIPCIONES')
-    calendar_id_cursada: Optional[str] = Field(default=None, env='CALENDAR_ID_CURSADA')
-    calendar_id_tramites: Optional[str] = Field(default=None, env='CALENDAR_ID_TRAMITES')
+    calendar_id_actividades_cecim: Optional[str] = Field(default=None, env='CALENDAR_ID_ACTIVIDADES_CECIM')
     
     class Config:
         env_prefix = ''
-
+    
     def get_calendars_config(self) -> Dict[str, CalendarInfo]:
-        """Retorna la configuración completa de calendarios."""
+        """Retorna configuración única de calendario de actividades CECIM."""
         return {
-            'examenes': CalendarInfo(
-                calendar_id=self.calendar_id_examenes,
-                name='Exámenes',
-                description='Fechas de exámenes parciales, finales y recuperatorios',
-                keywords=['examen', 'parcial', 'final', 'recuperatorio', 'coloquio', 'evaluación'],
-                color='#4285f4'  # Color azul del calendario
-            ),
-            'inscripciones': CalendarInfo(
-                calendar_id=self.calendar_id_inscripciones,
-                name='Inscripciones',
-                description='Calendario oficial de inscripciones a materias, finales y cursadas',
-                keywords=['inscripción', 'inscripciones', 'inscribir', 'anotarse', 'anotar', 'reasignación'],
-                color='#f4b400'  # Color amarillo del calendario
-            ),
-            'cursada': CalendarInfo(
-                calendar_id=self.calendar_id_cursada,
-                name='Cursada',
-                description='Inicio y fin de cursada, inicio y fin de vacaciones, etc.',
-                keywords=['cuatrimestre', 'inicio', 'fin', 'final', 'comienzo', 'fin de cursada', 'vacaciones'],
-                color='#a4725b'  # Color marrón del calendario
-            ),
-            'tramites': CalendarInfo(
-                calendar_id=self.calendar_id_tramites,
-                name='Trámites UBA Medicina',
-                description='Fechas importantes para trámites administrativos',
-                keywords=['trámite', 'vencimiento', 'documentación', 'administrativo', 'reincorporación'],
-                color='#7627bb'  # Color morado del calendario
+            'actividades_cecim': CalendarInfo(
+                calendar_id=self.calendar_id_actividades_cecim,
+                name='ACTIVIDADES CECIM',
+                description='Calendario unificado de actividades del CECIM',
+                keywords=['examen', 'parcial', 'final', 'inscripcion', 'inscripción', 'cursada', 'actividad', 'evento'],
+                color='#0b8043'
             )
         }
 

@@ -31,22 +31,12 @@ class CalendarService:
         self.timezone = pytz.timezone(CALENDAR_CONFIG['TIMEZONE'])
         logger.info("Servicio de Google Calendar inicializado correctamente")
 
-    def get_calendar_id_by_type(self, calendar_type: str) -> Optional[str]:
-        """
-        Obtiene el ID del calendario según su tipo.
-        Args:
-            calendar_type: Tipo de calendario (examenes, inscripciones, cursada, tramites)
-        Returns:
-            str: ID del calendario o None si no se encuentra
-        """
-        calendar_info = CALENDARS.get(calendar_type.lower())
-        if calendar_info and calendar_info['id']:
-            logger.info(f"Calendario encontrado para tipo {calendar_type}")
-            return calendar_info['id']
-        logger.error(f"No se encontró el calendario para tipo: {calendar_type}")
-        return None
+    def get_calendar_id(self) -> Optional[str]:
+        """Retorna el ID del calendario unificado de actividades CECIM."""
+        info = CALENDARS.get('actividades_cecim')
+        return info.get('id') if info else None
 
-    def get_events_this_week(self, calendar_type: str = None) -> List[Dict]:
+    def get_events_this_week(self) -> List[Dict]:
         """
         Obtiene los eventos de la semana actual.
         Args:
@@ -66,24 +56,9 @@ class CalendarService:
             
             all_events = []
             
-            # Si se especifica un tipo, buscar solo en ese calendario
-            if calendar_type:
-                calendar_id = self.get_calendar_id_by_type(calendar_type)
-                if calendar_id:
-                    events = self._get_events_from_calendar(calendar_id, time_min, time_max)
-                    if events:
-                        for event in events:
-                            event['calendar_type'] = calendar_type
-                        all_events.extend(events)
-            else:
-                # Buscar en todos los calendarios
-                for cal_type, cal_info in CALENDARS.items():
-                    if cal_info['id']:
-                        events = self._get_events_from_calendar(cal_info['id'], time_min, time_max)
-                        if events:
-                            for event in events:
-                                event['calendar_type'] = cal_type
-                            all_events.extend(events)
+            calendar_id = self.get_calendar_id()
+            if calendar_id:
+                all_events = self._get_events_from_calendar(calendar_id, time_min, time_max)
             
             return self._format_events(all_events)
             
@@ -108,34 +83,24 @@ class CalendarService:
             
             events = events_result.get('items', [])
             # Agregar el tipo de calendario a cada evento
-            calendar_type = next((cal_type for cal_type, info in CALENDARS.items() 
-                               if info['id'] == calendar_id), None)
-            if calendar_type:
-                for event in events:
-                    event['calendar_type'] = calendar_type
+            for event in events:
+                event['calendar_type'] = 'actividades_cecim'
             
             return events
         except HttpError as error:
             logger.error(f"Error al obtener eventos del calendario {calendar_id}: {error}")
             return []
 
-    def get_events_by_type(self, calendar_type: str, max_results: int = 10) -> List[Dict]:
-        """
-        Busca eventos en un calendario específico.
-        Args:
-            calendar_type: Tipo de calendario (examenes, inscripciones, cursada, tramites)
-            max_results: Número máximo de resultados a retornar
-        """
+    def get_upcoming_events(self, max_results: int = 10) -> List[Dict]:
+        """Obtiene próximos eventos del calendario unificado."""
         try:
-            # Normalizar el tipo de calendario
-            calendar_type = calendar_type.lower().strip()
-            calendar_id = self.get_calendar_id_by_type(calendar_type)
+            calendar_id = self.get_calendar_id()
             
             if not calendar_id:
-                logger.error(f"No se encontró el calendario: {calendar_type}")
+                logger.error(f"No se encontró el calendario de actividades CECIM")
                 return []
                 
-            logger.info(f"Buscando eventos en el calendario {calendar_type}")
+            logger.info(f"Buscando eventos próximos en el calendario de actividades CECIM")
             
             # Obtener eventos desde ahora
             now = datetime.now(self.timezone)
@@ -150,20 +115,19 @@ class CalendarService:
             
             events = events_result.get('items', [])
             
-            # Agregar el tipo de calendario a cada evento
             for event in events:
-                event['calendar_type'] = calendar_type
+                event['calendar_type'] = 'actividades_cecim'
                 
             formatted_events = self._format_events(events)
-            logger.info(f"Se encontraron {len(formatted_events)} eventos en el calendario {calendar_type}")
+            logger.info(f"Se encontraron {len(formatted_events)} eventos en el calendario de actividades CECIM")
             
             return formatted_events
             
         except HttpError as error:
-            logger.error(f"Error al buscar eventos en el calendario {calendar_type}: {error}")
+            logger.error(f"Error al buscar eventos en el calendario de actividades CECIM: {error}")
             return []
         except Exception as e:
-            logger.error(f"Error inesperado al buscar eventos en el calendario {calendar_type}: {e}")
+            logger.error(f"Error inesperado al buscar eventos en el calendario de actividades CECIM: {e}")
             return []
 
     def get_events_by_date_range(self, start_date: datetime, end_date: datetime, max_results: int = None) -> List[Dict]:
@@ -176,19 +140,16 @@ class CalendarService:
         """
         logger.info(f"Buscando eventos entre {start_date} y {end_date}")
         try:
-            params = {
-                'calendarId': self.calendar_id,
-                'timeMin': date_utils.format_date_for_api(start_date),
-                'timeMax': date_utils.format_date_for_api(end_date),
-                'singleEvents': True,
-                'orderBy': 'startTime'
-            }
-            
-            if max_results:
-                params['maxResults'] = max_results
-                
-            events_result = self.service.events().list(**params).execute()
-            events = events_result.get('items', [])
+            # Usar helper interno para respetar calendar_id y reusar formato
+            calendar_id = self.get_calendar_id()
+            if not calendar_id:
+                logger.error("No se encontró calendar_id para actividades CECIM")
+                return []
+            events = self._get_events_from_calendar(
+                calendar_id,
+                date_utils.format_date_for_api(start_date),
+                date_utils.format_date_for_api(end_date)
+            )
             logger.info(f"Se encontraron {len(events)} eventos en el rango de fechas")
             return self._format_events(events)
             
@@ -196,29 +157,7 @@ class CalendarService:
             logger.error(f"Error al buscar eventos por rango de fechas: {error}")
             return []
 
-    def get_upcoming_events(self, max_results: int = 10) -> List[Dict]:
-        """
-        Obtiene los próximos eventos.
-        Args:
-            max_results: Número máximo de eventos a retornar
-        """
-        logger.info(f"Buscando los próximos {max_results} eventos")
-        try:
-            events_result = self.service.events().list(
-                calendarId=self.calendar_id,
-                timeMin=datetime.now(datetime.UTC).isoformat() + 'Z',
-                maxResults=max_results,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-            
-            events = events_result.get('items', [])
-            logger.info(f"Se encontraron {len(events)} eventos próximos")
-            return self._format_events(events)
-            
-        except HttpError as error:
-            logger.error(f"Error al buscar eventos próximos: {error}")
-            return []
+    # get_upcoming_events redefinido arriba
 
     def get_events_from_query(self, query: str):
         """

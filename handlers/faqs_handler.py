@@ -7,7 +7,7 @@ import re
 from typing import Dict, List, Any, Optional
 
 from config.constants import information_emojis
-from unidecode import unidecode
+from utils.text_utils import normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -156,24 +156,6 @@ FAQ_RESPONSES = {
         "- Para 1ª o 2ª prórroga: El trámite se resuelve positivamente automáticamente\n"
         "- Para 3ª prórroga o superior: Debes presentar la constancia y tu Libreta Universitaria en la ventanilla del Ciclo Biomédico"
 }
-
-
-def normalize_text(text: str) -> str:
-    """
-    Normaliza un texto para mejor comparación.
-    
-    Args:
-        text (str): Texto a normalizar
-        
-    Returns:
-        str: Texto normalizado
-    """
-    normalized = text.lower().strip()
-    normalized = unidecode(normalized)  # Eliminar tildes
-    normalized = re.sub(r'[^\w\s]', ' ', normalized)  # Reemplazar signos de puntuación con espacios
-    normalized = re.sub(r'\s+', ' ', normalized).strip()  # Normalizar espacios
-    return normalized
-
 
 def get_faq_intent(query: str) -> Optional[Dict[str, Any]]:
     """

@@ -19,7 +19,7 @@ from test_handlers_interaction import TestHandlersInteraction
 from test_telegram import TestTelegram
 from test_google_services import TestGoogleServices
 from test_http_endpoints import TestHttpEndpoints
-from test_simulation import TestSimulation
+from test_simulation import TestRAGSimulation as TestSimulation
 
 
 # Mapeo de nombres de tests

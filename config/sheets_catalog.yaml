@@ -1,0 +1,60 @@
+# Catálogo para futuras hojas de Google Sheets (extensible)
+domains:
+  cursos:
+    spreadsheet_id: "ENV:CURSOS_SPREADSHEET_ID"
+    selector: "month_from_query"
+    # IMPORTANTE: Esta sheet NO tiene 'Hoja 1' sino hojas por meses
+    # Hojas disponibles con datos: MARZO, ABRIL, MAYO, JUNIO, JULIO, AGOSTO, SEPTIEMBRE
+    # Hojas vacías: ENERO, FEBRERO, OCTUBRE, NOVIEMBRE, DICIEMBRE
+    # NO se define sheet_name por defecto - debe determinarse dinámicamente
+    triggers:
+      keywords: ["curso", "cursada", "horario", "clases"]
+    ranges:
+      default: "A:E"
+    # Configuración especial para meses dinámicos
+    dynamic_sheets: true
+    available_months: ["MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE"]
+
+  contactos_secretarias:
+    spreadsheet_id: "19t4GasPKs2_Th-2YofT62KgPtfkJDlhLr7fR8Y2iJ4I"
+    selector: "direct"
+    triggers:
+      keywords: ["secretaria", "contacto", "mail", "hospital"]
+
+  horarios_catedra:
+    spreadsheet_id: "1xPT3mTqDNTsRjhM65vbI7SyLSVBbUkeE4VLH09HTywk"
+    selector: "direct"
+    triggers:
+      keywords: ["horario", "cátedra", "catedra", "materia", "secretaría", "secretaria", "sector", "piso", "mail"]
+    ranges:
+      default: "A:M"
+    sheet_name: "Hoja 1"
+
+  mails_nuevo_espacio:
+    spreadsheet_id: "1R5arCJAolOcMIAEBydTnIMi2boIagw4qyaI2UlC-eb0"
+    selector: "direct"
+    sheet_name: "Hoja 1"
+    ranges:
+      default: "A:A"
+    triggers:
+      keywords: ["voluntariado", "imprimir", "impresion", "impresiones", "histoteca", "readmision", "reincorporacion", "recursada", "prorroga", "prórroga", "contacto", "nuevo espacio"]
+
+  horarios_secretarias:
+    spreadsheet_id: "1GyKQXDdujbnAhfnWehcd8W9_jKzErlVmYhRHAvOV83U"
+    selector: "direct"
+    sheet_name: "Hoja 1"
+    ranges:
+      default: "A:J"
+    triggers:
+      keywords: ["secretaria", "secretaría", "alumnos", "admisión", "admision", "tesoreria", "tesorería", "kinesiologia", "obstetricia", "hemoterapia", "podologia", "radiologia", "naon", "archivos", "actas", "pases", "discapacidad", "género", "genero", "seube", "ubicacion", "piso", "horario", "mail"]
+
+  horarios_licenciaturas_tecnicaturas:
+    spreadsheet_id: "1Byu1Xqxrx-UCM9_18p0cWppOwNzTWn4DHt0R249kiuY"
+    selector: "direct"
+    sheet_name: "Hoja 1"
+    ranges:
+      default: "A:D"
+    triggers:
+      keywords: ["licenciatura", "tecnicatura", "lic", "tec", "kinesiologia", "fonoaudiologia", "nutricion", "enfermeria", "obstetricia", "bioimagenes", "podologia", "anestesia", "cosmetologia", "hemoterapia", "instrumentacion", "practicas cardiologicas", "atencion", "ubicacion", "contacto"]
+
+

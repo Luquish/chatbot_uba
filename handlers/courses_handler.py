@@ -190,23 +190,16 @@ def handle_sheet_course_query(query: str, sheets_service: SheetsService,
     # Determinar el sheet_name a consultar dinámicamente
     from utils.date_utils import DateUtils
     date_utils = DateUtils()
-    
-    # Detectar si se menciona un mes específico en la consulta
-    months_es = {
-        'enero': 'ENERO', 'febrero': 'FEBRERO', 'marzo': 'MARZO', 'abril': 'ABRIL',
-        'mayo': 'MAYO', 'junio': 'JUNIO', 'julio': 'JULIO', 'agosto': 'AGOSTO',
-        'septiembre': 'SEPTIEMBRE', 'octubre': 'OCTUBRE', 'noviembre': 'NOVIEMBRE', 'diciembre': 'DICIEMBRE'
-    }
-    
+
+    # Detectar si se menciona un mes específico en la consulta (centralizado)
     query_lower = query.lower()
     sheet_name_to_query = None
-    
-    # Buscar meses mencionados en la consulta
-    for month_name, month_upper in months_es.items():
-        if month_name in query_lower:
-            sheet_name_to_query = month_upper
+    detected_month = DateUtils.detect_month_from_text(query_lower)
+    if detected_month:
+        month_num = DateUtils.month_name_to_num(detected_month)
+        if month_num:
+            sheet_name_to_query = DateUtils.num_to_month_name(month_num, uppercase=True)
             logger.info(f"Mes detectado en consulta: {sheet_name_to_query}")
-            break
     
     # Si no se detectó un mes específico, verificar referencias relativas
     if not sheet_name_to_query:
@@ -214,14 +207,14 @@ def handle_sheet_course_query(query: str, sheets_service: SheetsService,
             # Obtener el mes siguiente
             current_month = date_utils.get_today().month
             next_month = current_month + 1 if current_month < 12 else 1
-            next_month_name = list(months_es.values())[next_month - 1]
+            next_month_name = DateUtils.num_to_month_name(next_month, uppercase=True)
             sheet_name_to_query = next_month_name
             logger.info(f"Mes siguiente detectado: {sheet_name_to_query}")
         elif any(phrase in query_lower for phrase in ["mes pasado", "mes anterior", "último mes", "ultimo mes"]):
             # Obtener el mes anterior
             current_month = date_utils.get_today().month
             prev_month = current_month - 1 if current_month > 1 else 12
-            prev_month_name = list(months_es.values())[prev_month - 1]
+            prev_month_name = DateUtils.num_to_month_name(prev_month, uppercase=True)
             sheet_name_to_query = prev_month_name
             logger.info(f"Mes anterior detectado: {sheet_name_to_query}")
         else:
@@ -257,41 +250,31 @@ def handle_sheet_course_query(query: str, sheets_service: SheetsService,
                                               "cursos para esta semana", "qué hay esta semana"]):
         return handle_courses_this_week_query(parsed_courses, date_utils)
     
-    # Verificar si la consulta es sobre cursos para un día específico
-    weekday_queries = [
-        ("lunes", "el lunes", "para el lunes", "del lunes"),
-        ("martes", "el martes", "para el martes", "del martes"),
-        ("miércoles", "el miércoles", "para el miércoles", "del miércoles"),
-        ("jueves", "el jueves", "para el jueves", "del jueves"),
-        ("viernes", "el viernes", "para el viernes", "del viernes"),
-        ("sábado", "el sábado", "para el sábado", "del sábado"),
-        ("domingo", "el domingo", "para el domingo", "del domingo"),
-        ("hoy", "para hoy", "de hoy"),
-        ("mañana", "para mañana", "de mañana")
-    ]
-    
-    for weekday_terms in weekday_queries:
-        base_term = weekday_terms[0]
-        if any(term in query_lower for term in weekday_terms):
-            # Si es "hoy", obtener el día de la semana actual
-            if base_term == "hoy":
-                base_term = date_utils.get_current_weekday_name()
-            # Si es "mañana", obtener el día de mañana
-            elif base_term == "mañana":
-                tomorrow = date_utils.add_days(date_utils.get_today(), 1)
-                base_term = date_utils.get_weekday_name(tomorrow)
-            
-            # Buscar también un curso específico en la consulta
-            specific_course = None
-            for keyword in ["curso", "actividad", "formulario", "cursos"]:
-                if keyword in query_lower:
-                    # Intentar extraer el nombre del curso después de la palabra clave
-                    parts = query_lower.split(keyword, 1)
-                    if len(parts) > 1 and parts[1].strip():
-                        specific_course = parts[1].strip()
-                        break
-            
-            return handle_weekday_course_query(parsed_courses, base_term, specific_course, date_utils)
+    # Verificar si la consulta es sobre cursos para un día específico (centralizado)
+    from utils.text_utils import normalize_text
+    qn = normalize_text(query)
+    base_term = None
+    if 'hoy' in qn:
+        base_term = date_utils.get_current_weekday_name()
+    elif 'mañana' in qn or 'manana' in qn:
+        tomorrow = date_utils.add_days(date_utils.get_today(), 1)
+        base_term = date_utils.get_weekday_name(tomorrow)
+    else:
+        for d in ["lunes","martes","miércoles","miercoles","jueves","viernes","sábado","sabado","domingo"]:
+            if normalize_text(d) in qn:
+                base_term = d if d not in ["miercoles","sabado"] else ("miércoles" if d=="miercoles" else "sábado")
+                break
+
+    if base_term:
+        # Buscar también un curso específico en la consulta
+        specific_course = None
+        for keyword in ["curso", "actividad", "formulario", "cursos"]:
+            if keyword in qn:
+                parts = qn.split(keyword, 1)
+                if len(parts) > 1 and parts[1].strip():
+                    specific_course = parts[1].strip()
+                    break
+        return handle_weekday_course_query(parsed_courses, base_term, specific_course, date_utils)
     
     # Verificar si la consulta es sobre una fecha específica
     date = date_utils.parse_date_from_text(query)
@@ -340,13 +323,13 @@ def handle_sheet_course_query(query: str, sheets_service: SheetsService,
 
     # Si es una consulta general sobre cursos (sin especificar uno)
     # O si menciona un mes directamente (consulta contextual)
-    mentions_month = any(month in query_lower for month in months_es.keys())
+    mentions_month = DateUtils.detect_month_from_text(query_lower) is not None
     has_course_keywords = any(keyword in query_lower for keyword in SHEET_COURSE_KEYWORDS if keyword not in specific_course_keywords)
     
     if has_course_keywords or mentions_month:
         # Mostrar los cursos más próximos primero
         sorted_courses = sort_courses_by_proximity(parsed_courses, date_utils)
-        response_intro = f"{random.choice(information_emojis)} Sobre los cursos en la hoja '{sheet_name_to_query}', esto es lo que tengo próximamente:\n"
+        response_intro = f"{random.choice(information_emojis)} Los cursos para esos dias son:\n"
         
         found_courses_info = []
         for course in sorted_courses[:3]: # Mostrar hasta 3 cursos
@@ -424,14 +407,10 @@ def handle_weekday_course_query(parsed_courses: List[Dict[str, Any]], weekday_na
     if date_utils:
         weekday_courses = date_utils.get_courses_for_weekday(parsed_courses, clean_weekday_name)
     else:
-        # Fallback si no tenemos date_utils
-        weekday_abbr = {
-            "lunes": "lun", "martes": "mar", "miércoles": "mié", "jueves": "jue", "viernes": "vie",
-            "sábado": "sáb", "domingo": "dom"
-        }.get(clean_weekday_name, "")
-        
+        # Fallback si no tenemos date_utils: usar abreviaturas centralizadas
+        from utils.date_utils import DateUtils as _DU
+        weekday_abbr = _DU.get_weekday_abbr(clean_weekday_name)
         for course in parsed_courses:
-            # Buscar coincidencias directas o por abreviatura en el campo de fecha
             if (clean_weekday_name in course.get('fecha', '').lower() or 
                 weekday_abbr in course.get('fecha', '').lower()):
                 weekday_courses.append(course)
