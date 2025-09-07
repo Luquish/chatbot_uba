@@ -138,7 +138,7 @@ class TestDatabase(BaseTest):
                 # Test de búsqueda vectorial básica
                 if stats.get('total_embeddings', 0) > 0:
                     test_embedding = np.random.random(1536).astype(np.float32)
-                    results = vector_service.search_similar(test_embedding, k=1)
+                    results = vector_service.similarity_search(test_embedding, k=1)
                     self.log_success(f"Búsqueda vectorial funcional: {len(results)} resultado(s)")
                 else:
                     self.log_warning("No hay embeddings en la base de datos")

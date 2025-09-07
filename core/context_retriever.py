@@ -41,7 +41,7 @@ class ContextRetriever:
     
     def retrieve_relevant_chunks(self, query: str, k: int = 5) -> List[Dict]:
         """
-        Recupera chunks relevantes para una consulta.
+        Recupera chunks relevantes para una consulta usando múltiples estrategias.
         
         Args:
             query: La consulta del usuario
@@ -59,14 +59,20 @@ class ContextRetriever:
         # Detectar entidades críticas
         detected_entities = self._detect_critical_entities(query_lower)
         
-        # Realizar búsqueda principal por embedding
+        # Estrategia 1: Búsqueda principal por embedding
         results = self._search_by_embedding(query, k)
         
-        # Procesar entidades críticas si se detectaron
+        # Estrategia 2: Búsqueda por variaciones de la consulta
+        query_variations = self._generate_query_variations(query)
+        for variation in query_variations[:2]:  # Máximo 2 variaciones
+            variation_results = self._search_by_embedding(variation, k//2)
+            results = self._merge_results(results, variation_results, k)
+        
+        # Estrategia 3: Procesar entidades críticas si se detectaron
         if detected_entities:
             results = self._process_critical_entities(detected_entities, results, k)
         
-        # Complementar con palabras clave si es necesario
+        # Estrategia 4: Complementar con palabras clave si es necesario
         results = self._supplement_with_keywords(query_lower, results, k)
         
         # Log de resultados
@@ -238,6 +244,69 @@ class ContextRetriever:
                 # Implementar búsqueda por keyword si el vector store lo soporta
         
         return results
+    
+    def _generate_query_variations(self, query: str) -> List[str]:
+        """Genera variaciones de la consulta para mejorar la recuperación."""
+        variations = []
+        query_lower = query.lower()
+        
+        # Variación 1: Sin palabras de conexión
+        stop_words = ['como', 'cómo', 'donde', 'dónde', 'que', 'qué', 'para', 'por', 'con', 'de', 'la', 'el', 'los', 'las']
+        words = [word for word in query_lower.split() if word not in stop_words]
+        if len(words) > 2:
+            variations.append(' '.join(words))
+        
+        # Variación 2: Forma más formal
+        formal_mapping = {
+            'como': 'cómo',
+            'donde': 'dónde', 
+            'que': 'qué',
+            'cuando': 'cuándo',
+            'porque': 'por qué'
+        }
+        formal_words = []
+        for word in query_lower.split():
+            formal_words.append(formal_mapping.get(word, word))
+        variations.append(' '.join(formal_words))
+        
+        # Variación 3: Sinónimos académicos
+        academic_synonyms = {
+            'tramite': 'trámite',
+            'tramites': 'trámites',
+            'inscripcion': 'inscripción',
+            'inscripciones': 'inscripciones',
+            'examen': 'evaluación',
+            'examenes': 'evaluaciones'
+        }
+        synonym_words = []
+        for word in query_lower.split():
+            synonym_words.append(academic_synonyms.get(word, word))
+        variations.append(' '.join(synonym_words))
+        
+        return variations
+    
+    def _merge_results(self, results1: List[Dict], results2: List[Dict], k: int) -> List[Dict]:
+        """Combina resultados de diferentes búsquedas eliminando duplicados."""
+        # Crear un diccionario para evitar duplicados
+        unique_results = {}
+        
+        # Agregar resultados de la primera búsqueda
+        for result in results1:
+            text_key = result.get('text', '')[:100]  # Usar primeros 100 chars como clave
+            if text_key not in unique_results or result.get('similarity', 0) > unique_results[text_key].get('similarity', 0):
+                unique_results[text_key] = result
+        
+        # Agregar resultados de la segunda búsqueda
+        for result in results2:
+            text_key = result.get('text', '')[:100]
+            if text_key not in unique_results or result.get('similarity', 0) > unique_results[text_key].get('similarity', 0):
+                unique_results[text_key] = result
+        
+        # Convertir de vuelta a lista y ordenar por similitud
+        merged_results = list(unique_results.values())
+        merged_results.sort(key=lambda x: x.get('similarity', 0), reverse=True)
+        
+        return merged_results[:k]
     
     def _log_results(self, results: List[Dict]):
         """Registra información sobre los resultados encontrados."""

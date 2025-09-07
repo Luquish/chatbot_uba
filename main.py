@@ -105,7 +105,7 @@ async def telegram_webhook(request: Request):
         logger.info(f"Headers: {request.headers}")
         
         # Obtener el handler de Telegram
-        telegram_handler = get_telegram_handler()
+        telegram_handler = app_manager.get_telegram_handler()
         
         # Validar webhook
         if not await telegram_handler.validate_webhook(request):
@@ -171,7 +171,7 @@ async def telegram_webhook(request: Request):
 async def verify_telegram_webhook(request: Request):
     """Endpoint para verificar el webhook de Telegram."""
     try:
-        telegram_handler = get_telegram_handler()
+        telegram_handler = app_manager.get_telegram_handler()
         webhook_info = await telegram_handler.get_webhook_info()
         
         return {
@@ -213,9 +213,10 @@ async def test_telegram():
             }
             
             # Si hay un admin user ID configurado, enviar mensaje de prueba
-            if TELEGRAM_ADMIN_USER_ID:
+            admin_user_id = app_manager.telegram_admin_user_id
+            if admin_user_id:
                 test_result = await telegram_handler.send_message(
-                    TELEGRAM_ADMIN_USER_ID,
+                    admin_user_id,
                     "🤖 Este es un mensaje de prueba desde el endpoint /test-telegram.\n\n✅ El bot está funcionando correctamente."
                 )
                 
@@ -239,7 +240,7 @@ async def test_telegram():
 async def setup_telegram_webhook(webhook_url: str):
     """Configura el webhook de Telegram."""
     try:
-        telegram_handler = get_telegram_handler()
+        telegram_handler = app_manager.get_telegram_handler()
         result = await telegram_handler.set_webhook(webhook_url)
         
         return {
@@ -255,7 +256,7 @@ async def setup_telegram_webhook(webhook_url: str):
 async def delete_telegram_webhook():
     """Elimina el webhook de Telegram."""
     try:
-        telegram_handler = get_telegram_handler()
+        telegram_handler = app_manager.get_telegram_handler()
         result = await telegram_handler.delete_webhook()
         
         return {

@@ -29,6 +29,7 @@ COPY scripts/setup_database.py scripts/
 
 # Module directories - Backend necesita estos
 COPY config/ config/
+COPY core/ core/
 COPY db/ db/
 COPY handlers/ handlers/
 COPY models/ models/

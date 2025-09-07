@@ -18,6 +18,9 @@ domains:
   contactos_secretarias:
     spreadsheet_id: "19t4GasPKs2_Th-2YofT62KgPtfkJDlhLr7fR8Y2iJ4I"
     selector: "direct"
+    # No especificar sheet_name para usar la hoja por defecto
+    ranges:
+      default: "A:E"
     triggers:
       keywords: ["secretaria", "contacto", "mail", "hospital"]
 

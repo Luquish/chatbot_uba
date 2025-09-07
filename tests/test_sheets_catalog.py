@@ -187,11 +187,16 @@ class TestSheetsCatalog(BaseTest):
                     self.log_warning(f"   ⚠️ {domain_name}: dynamic_sheets=true pero sin available_months")
                     return False
             else:
-                sheet_name = config.get('sheet_name', 'Hoja 1')
+                sheet_name = config.get('sheet_name')
             
             ranges = config.get('ranges', {})
             default_range = ranges.get('default', 'A:E')
-            full_range = f"'{sheet_name}'!{default_range}"
+            
+            # Si no hay sheet_name, usar solo el rango
+            if sheet_name:
+                full_range = f"'{sheet_name}'!{default_range}"
+            else:
+                full_range = default_range
             
             self.log_info(f"   🔗 Probando conectividad: {spreadsheet_id} - {full_range}")
             

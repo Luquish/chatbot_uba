@@ -114,6 +114,8 @@ EJEMPLOS:
 - Si la consulta anterior fue sobre "Dr. García" y la actual es "¿y su horario de consultas?", se refiere a "horario de consultas del Dr. García"
 - Si la consulta anterior fue sobre "secretaría de ciclo clínico" y la actual es "y donde se encuentra?", se refiere a "ubicación de secretaría de ciclo clínico"
 - Si la consulta anterior fue sobre "hospital durand" y la actual es "y cual es el contacto?", se refiere a "contacto del hospital durand"
+- Si la consulta anterior fue sobre "hospital durand" y la actual es "y donde queda?", se refiere a "ubicación del hospital durand"
+- Si la consulta anterior fue sobre "hospitales" y la actual es "y el mapa?", se refiere a "mapa de hospitales"
 - Si la consulta anterior fue sobre "cursos de octubre" y la actual es "y para noviembre?", se refiere a "cursos de noviembre"
 
 RESPONDE EXACTAMENTE en formato JSON:
@@ -201,6 +203,14 @@ class HybridContextResolver:
             "y el programa de la materia": {"type": "subject_program", "offset": 0},
             "y la bibliografía de la materia": {"type": "subject_bibliography", "offset": 0},
             "y el horario de la materia": {"type": "subject_schedule", "offset": 0},
+            "y las fechas": {"type": "subject_dates", "offset": 0},
+            "y los exámenes": {"type": "subject_exams", "offset": 0},
+            "y la evaluación": {"type": "subject_evaluation", "offset": 0},
+            "y el profesor": {"type": "subject_professor", "offset": 0},
+            "y la cátedra": {"type": "subject_chair", "offset": 0},
+            "y el contenido": {"type": "subject_content", "offset": 0},
+            "y los temas": {"type": "subject_topics", "offset": 0},
+            "y la modalidad": {"type": "subject_modality", "offset": 0},
             
             # Patrones para docentes
             "y sus materias": {"type": "teacher_subjects", "offset": 0},
@@ -224,6 +234,14 @@ class HybridContextResolver:
             "y qué documentación necesito": {"type": "procedure_docs", "offset": 0},
             "y los pasos": {"type": "procedure_steps", "offset": 0},
             "y cómo hacerlo": {"type": "procedure_steps", "offset": 0},
+            "y dónde presentarlo": {"type": "procedure_location", "offset": 0},
+            "y cuánto demora": {"type": "procedure_duration", "offset": 0},
+            "y el horario de atención": {"type": "procedure_hours", "offset": 0},
+            "y el contacto": {"type": "procedure_contact", "offset": 0},
+            "y el teléfono": {"type": "procedure_phone", "offset": 0},
+            "y el email": {"type": "procedure_email", "offset": 0},
+            "y la dirección": {"type": "procedure_address", "offset": 0},
+            "y los horarios": {"type": "procedure_hours", "offset": 0},
             
             # Patrones para biblioteca
             "y los horarios": {"type": "library_hours", "offset": 0},
@@ -246,10 +264,20 @@ class HybridContextResolver:
             "y el teléfono": {"type": "admin_phone", "offset": 0},
             "y la dirección": {"type": "admin_address", "offset": 0},
             "y la direccion": {"type": "admin_address", "offset": 0},
+            
+            # Patrones para hospitales
+            "y donde queda": {"type": "hospital_location", "offset": 0},
+            "y dónde queda": {"type": "hospital_location", "offset": 0},
+            "y el mapa": {"type": "hospital_map", "offset": 0},
+            "y como llegar": {"type": "hospital_directions", "offset": 0},
+            "y cómo llegar": {"type": "hospital_directions", "offset": 0},
+            "y la ubicacion": {"type": "hospital_location", "offset": 0},
+            "y la ubicación": {"type": "hospital_location", "offset": 0},
             "y para noviembre": {"type": "forward", "offset": 1},
             "y para septiembre": {"type": "backward", "offset": -1},
             "y el que sigue después": {"type": "forward", "offset": 1},
             "y el que sigue": {"type": "forward", "offset": 1},
+            "y la que sigue": {"type": "forward", "offset": 1},
         }
     
     def resolve_relative_query(self, current_query: str, session_context: Dict[str, Any]) -> ContextResolution:
@@ -390,6 +418,21 @@ class HybridContextResolver:
                     confidence=0.9
                 )
         
+        # Para hospitales
+        elif last_query_type == 'hospitales' and session_context.get('last_hospital_requested'):
+            if pattern_type.startswith('hospital_'):
+                resolved_context = self._resolve_hospital_pattern(
+                    pattern_type, session_context['last_hospital_requested']
+                )
+                return ContextResolution(
+                    is_relative=True,
+                    resolved_context=resolved_context,
+                    context_type="hospital",
+                    offset=0,
+                    explanation=f"Patrón rápido: {pattern_type} para {session_context['last_hospital_requested']}",
+                    confidence=0.9
+                )
+        
         return ContextResolution(explanation="Patrón detectado pero contexto insuficiente")
     
     def _calculate_month_offset(self, current_month: str, offset: int) -> str:
@@ -430,6 +473,14 @@ class HybridContextResolver:
             "subject_bibliography": f"bibliografía de {subject}",
             "subject_schedule": f"horarios de {subject}",
             "subject_course": f"cursada de {subject}",
+            "subject_dates": f"fechas importantes de {subject}",
+            "subject_exams": f"exámenes de {subject}",
+            "subject_evaluation": f"evaluación de {subject}",
+            "subject_professor": f"profesor de {subject}",
+            "subject_chair": f"cátedra de {subject}",
+            "subject_content": f"contenido de {subject}",
+            "subject_topics": f"temas de {subject}",
+            "subject_modality": f"modalidad de {subject}",
         }
         return pattern_mapping.get(pattern_type, f"información sobre {subject}")
     
@@ -453,6 +504,13 @@ class HybridContextResolver:
             "procedure_cost": f"costo de {procedure}",
             "procedure_steps": f"procedimiento de {procedure}",
             "procedure_docs": f"documentación para {procedure}",
+            "procedure_location": f"dónde presentar {procedure}",
+            "procedure_duration": f"cuánto demora {procedure}",
+            "procedure_hours": f"horarios de atención para {procedure}",
+            "procedure_contact": f"contacto para {procedure}",
+            "procedure_phone": f"teléfono para {procedure}",
+            "procedure_email": f"email para {procedure}",
+            "procedure_address": f"dirección para {procedure}",
         }
         return pattern_mapping.get(pattern_type, f"información sobre {procedure}")
     
@@ -477,3 +535,12 @@ class HybridContextResolver:
             "admin_address": f"dirección de {department}",
         }
         return pattern_mapping.get(pattern_type, f"información sobre {department}")
+    
+    def _resolve_hospital_pattern(self, pattern_type: str, hospital: str) -> str:
+        """Resuelve patrones relacionados con hospitales."""
+        pattern_mapping = {
+            "hospital_location": f"ubicación de {hospital}",
+            "hospital_map": f"mapa de {hospital}",
+            "hospital_directions": f"cómo llegar a {hospital}",
+        }
+        return pattern_mapping.get(pattern_type, f"información sobre {hospital}")

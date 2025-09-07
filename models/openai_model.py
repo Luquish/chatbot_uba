@@ -89,12 +89,26 @@ class OpenAIEmbedding:
             np.ndarray: Matriz con los embeddings generados.
         """
         convert_to_numpy = kwargs.get("convert_to_numpy", True)
-        normalize_embeddings = kwargs.get("normalize_embeddings", False)
+        normalize_embeddings = kwargs.get("normalize_embeddings", True)
+        preprocess = kwargs.get("preprocess", True)
 
         try:
+            # Preprocesar textos si está habilitado
+            processed_texts = texts
+            if preprocess:
+                from utils.text_utils import preprocess_for_embedding, clean_query_for_embedding
+                processed_texts = []
+                for text in texts:
+                    # Usar limpieza específica para consultas si parece ser una consulta
+                    if any(word in text.lower() for word in ['cómo', 'como', 'qué', 'que', 'dónde', 'donde', 'cuándo', 'cuando']):
+                        processed_text = clean_query_for_embedding(text)
+                    else:
+                        processed_text = preprocess_for_embedding(text)
+                    processed_texts.append(processed_text)
+            
             response = openai.embeddings.create(
                 model=self.model_name,
-                input=texts,
+                input=processed_texts,
                 encoding_format="float",
                 timeout=self.timeout,
             )

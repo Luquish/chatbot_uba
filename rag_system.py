@@ -35,6 +35,7 @@ from services.tools.horarios_lic_tec_tool import HorariosLicTecTool
 from services.tools.horarios_secretarias_tool import HorariosSecretariasTool
 from services.tools.mails_nuevo_espacio_tool import MailsNuevoEspacioTool
 from services.tools.conversational_tool import ConversationalTool
+from services.tools.hospitales_tool import HospitalesTool
 
 load_dotenv()
 
@@ -144,6 +145,7 @@ class RAGSystem:
         self.router = Router(tools=[
             ConversationalTool(self.model),
             FaqTool(),
+            HospitalesTool(),
             CalendarTool(self.calendar_service),
             SheetsTool(self.sheets_service, self.date_utils),
             HorariosCatedraTool(self.sheets_service),

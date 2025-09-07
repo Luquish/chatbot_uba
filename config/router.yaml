@@ -20,6 +20,13 @@ tools:
     thresholds:
       accept: 0.7
 
+  - name: hospitales
+    priority: 75
+    triggers:
+      keywords: ["hospital", "hospitales", "udh", "unidad docente hospitalaria", "donde queda", "dónde queda", "ubicacion", "ubicación", "direccion", "dirección", "mapa", "como llegar", "cómo llegar"]
+    thresholds:
+      accept: 0.4
+
   - name: sheets.cursos
     priority: 60
     triggers:

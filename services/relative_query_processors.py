@@ -107,13 +107,15 @@ class CalendarRelativeProcessor:
         "y la siguiente": {"type": "context", "offset": 1},
         "y el que viene": {"type": "context", "offset": 1},
         "y el que sigue": {"type": "context", "offset": 1},
+        "y la que viene": {"type": "context", "offset": 1},
+        "y la que sigue": {"type": "context", "offset": 1},
         "el que viene": {"type": "context", "offset": 1},
         "el que sigue": {"type": "context", "offset": 1}
     }
     
     def can_process(self, session) -> bool:
         """Verifica si puede procesar la consulta basada en la sesión."""
-        return session.last_query_type.startswith("calendario") and session.last_time_reference
+        return session.last_query_type.startswith("calendario") and bool(session.last_time_reference)
     
     def process(self, session, query: str, user_id: str) -> Optional[RelativeContext]:
         """Procesa consulta relativa de calendario."""

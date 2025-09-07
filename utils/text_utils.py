@@ -73,3 +73,72 @@ def strip_markdown_emphasis(text: str) -> str:
     return text
 
 
+def preprocess_for_embedding(text: str) -> str:
+    """
+    Preprocesa texto específicamente para generar embeddings de alta calidad.
+    
+    Args:
+        text: Texto a preprocesar
+        
+    Returns:
+        Texto preprocesado optimizado para embeddings
+    """
+    if not text:
+        return ""
+    
+    # 1. Limpiar caracteres especiales y formato PDF
+    text = re.sub(r'\[Documento:.*?\]', '', text)  # Remover metadatos de documento
+    text = re.sub(r'<sup>\d+</sup>', '', text)  # Remover referencias como <sup>1</sup>
+    text = re.sub(r'##\s*', '', text)  # Remover headers markdown
+    text = re.sub(r'\n+', ' ', text)  # Reemplazar saltos de línea con espacios
+    
+    # 2. Normalizar espacios y caracteres
+    text = re.sub(r'\s+', ' ', text)  # Colapsar espacios múltiples
+    text = text.strip()
+    
+    # 3. Limpiar caracteres de control y no imprimibles
+    text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+    
+    # 4. Preservar estructura semántica importante
+    # Mantener números, fechas, artículos legales
+    text = re.sub(r'Art\.?\s*(\d+)', r'Artículo \1', text)  # Normalizar referencias a artículos
+    text = re.sub(r'Resolución\s*\(CS\)\s*(\d+)', r'Resolución CS \1', text)  # Normalizar resoluciones
+    
+    # 5. Limpiar pero preservar contenido académico
+    text = re.sub(r'[^\w\s\.\,\;\:\!\?\-\(\)\[\]\/]', ' ', text)  # Mantener puntuación importante
+    text = re.sub(r'\s+', ' ', text)  # Limpiar espacios nuevamente
+    
+    return text.strip()
+
+
+def clean_query_for_embedding(query: str) -> str:
+    """
+    Limpia consultas de usuario para mejorar matching con embeddings.
+    
+    Args:
+        query: Consulta del usuario
+        
+    Returns:
+        Consulta limpia optimizada para embeddings
+    """
+    if not query:
+        return ""
+    
+    # Normalizar consulta
+    query = query.strip()
+    
+    # Remover signos de interrogación al inicio/final
+    query = re.sub(r'^[¿\?]+|[¿\?]+$', '', query)
+    
+    # Normalizar variaciones comunes
+    query = re.sub(r'\bcomo\b', 'cómo', query, flags=re.IGNORECASE)
+    query = re.sub(r'\bdonde\b', 'dónde', query, flags=re.IGNORECASE)
+    query = re.sub(r'\bque\b', 'qué', query, flags=re.IGNORECASE)
+    query = re.sub(r'\bcuando\b', 'cuándo', query, flags=re.IGNORECASE)
+    
+    # Limpiar espacios
+    query = re.sub(r'\s+', ' ', query).strip()
+    
+    return query
+
+
