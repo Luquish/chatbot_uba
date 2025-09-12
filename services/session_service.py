@@ -15,6 +15,27 @@ from .llm_context_resolver import HybridContextResolver
 
 logger = logging.getLogger(__name__)
 
+
+# Excepciones específicas para el manejo de sesiones
+class SessionError(Exception):
+    """Excepción base para errores de sesión."""
+    pass
+
+
+class SessionNotFoundError(SessionError):
+    """Se lanza cuando no se encuentra una sesión solicitada."""
+    pass
+
+
+class SessionExpiredError(SessionError):
+    """Se lanza cuando se intenta usar una sesión expirada."""
+    pass
+
+
+class InvalidSessionDataError(SessionError):
+    """Se lanza cuando los datos de sesión son inválidos."""
+    pass
+
 @dataclass
 class UserSession:
     """Datos de sesión de usuario."""
@@ -49,34 +70,47 @@ class UserSession:
 class SessionService:
     """Servicio para manejar sesiones temporales en memoria."""
 
-    def __init__(self, max_sessions: int = 1000, ttl_seconds: int = 3600, enable_background_sweeper: bool = True, relative_query_manager: Optional[RelativeQueryManager] = None):
+    def __init__(self, max_sessions: int = 1000, ttl_seconds: int = None, enable_background_sweeper: bool = True, relative_query_manager: Optional[RelativeQueryManager] = None):
         """
         Inicializa el servicio de sesiones.
         
         Args:
             max_sessions: Número máximo de sesiones simultáneas
-            ttl_seconds: Tiempo de vida de las sesiones en segundos (por defecto 1 hora)
+            ttl_seconds: Tiempo de vida de las sesiones en segundos (None para usar config)
+            enable_background_sweeper: Si habilitar el limpiador automático
+            relative_query_manager: Gestor de consultas relativas (opcional)
         """
         self.sessions: Dict[str, UserSession] = {}
         self.max_sessions = max_sessions
-        # Usar TTL desde settings si está disponible; por defecto 30 minutos
-        config_ttl = None
-        try:
-            config_ttl = config.session.ttl_seconds
-        except Exception:
-            config_ttl = None
-        self.ttl_seconds = ttl_seconds if ttl_seconds is not None else (config_ttl or 1800)
+        
+        # Configuración unificada de TTL: usar config.session.ttl_seconds como fuente única de verdad
+        if ttl_seconds is not None:
+            self.ttl_seconds = ttl_seconds
+        else:
+            try:
+                self.ttl_seconds = config.session.ttl_seconds
+            except Exception:
+                # Fallback consistente: 30 minutos (1800 segundos)
+                self.ttl_seconds = 1800
+        
         self._lock = Lock()
+        
         # Configurar barrido en segundo plano
         self._sweeper_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._sweeper_interval = getattr(getattr(config, 'session', None), 'sweeper_interval_seconds', 60)
+        try:
+            self._sweeper_interval = config.session.sweeper_interval_seconds
+        except Exception:
+            self._sweeper_interval = 60  # 1 minuto por defecto
+        
         # Gestor de consultas relativas (híbrido: patrones + LLM)
         self.relative_query_manager = relative_query_manager or RelativeQueryManager()
         self.llm_context_resolver = HybridContextResolver()
+        
         if enable_background_sweeper:
             self._start_background_sweeper()
-        logger.info(f"SessionService inicializado. Max sesiones: {max_sessions}, TTL: {self.ttl_seconds}s, Sweeper: {enable_background_sweeper}")
+            
+        logger.info(f"SessionService inicializado. Max sesiones: {max_sessions}, TTL: {self.ttl_seconds}s, Sweeper: {enable_background_sweeper}, Intervalo: {self._sweeper_interval}s")
 
     def get_session(self, user_id: str) -> UserSession:
         """
@@ -87,26 +121,46 @@ class SessionService:
             
         Returns:
             UserSession: Sesión del usuario
+            
+        Raises:
+            ValueError: Si user_id es inválido
         """
+        # Validar user_id
+        if not user_id or not isinstance(user_id, str) or not user_id.strip():
+            raise InvalidSessionDataError("user_id debe ser una cadena no vacía")
+        
+        user_id = user_id.strip()
+        
         with self._lock:
-            # Limpiar sesiones expiradas antes de crear nuevas
+            # PRIMERO: Verificar si existe una sesión válida
+            if user_id in self.sessions:
+                session = self.sessions[user_id]
+                # Si la sesión no ha expirado, actualizarla y devolverla
+                if not session.is_expired(self.ttl_seconds):
+                    session.update_activity()
+                    logger.debug(f"Sesión existente actualizada para usuario: {user_id}")
+                    return session
+                else:
+                    # Si expiró, eliminarla
+                    session_age = time.time() - session.last_activity
+                    del self.sessions[user_id]
+                    logger.info(f"Sesión expirada eliminada para usuario: {user_id} (edad: {session_age:.1f}s)")
+            
+            # SEGUNDO: Limpiar otras sesiones expiradas
             self._cleanup_expired_sessions()
             
-            if user_id not in self.sessions:
-                # Verificar límite de sesiones
-                if len(self.sessions) >= self.max_sessions:
-                    # Eliminar la sesión más antigua
-                    oldest_user = min(self.sessions.keys(), 
-                                     key=lambda k: self.sessions[k].last_activity)
-                    del self.sessions[oldest_user]
-                    logger.info(f"Sesión eliminada por límite: {oldest_user}")
-                
-                # Crear nueva sesión
-                self.sessions[user_id] = UserSession(user_id=user_id)
-                logger.info(f"Nueva sesión creada para usuario: {user_id}")
+            # TERCERO: Verificar límite de sesiones antes de crear nueva
+            if len(self.sessions) >= self.max_sessions:
+                # Eliminar la sesión más antigua
+                oldest_user = min(self.sessions.keys(), 
+                                 key=lambda k: self.sessions[k].last_activity)
+                del self.sessions[oldest_user]
+                logger.info(f"Sesión eliminada por límite: {oldest_user}")
             
-            # Actualizar actividad
-            self.sessions[user_id].update_activity()
+            # CUARTO: Crear nueva sesión
+            self.sessions[user_id] = UserSession(user_id=user_id)
+            logger.info(f"Nueva sesión creada para usuario: {user_id}")
+            
             return self.sessions[user_id]
 
     def update_session_context(self, user_id: str, query: str, query_type: str, 
@@ -132,44 +186,55 @@ class SessionService:
             department_requested: Departamento específico mencionado
             user_name: Nombre del usuario si está disponible
             **kwargs: Datos adicionales de contexto
+            
+        Raises:
+            ValueError: Si los parámetros son inválidos
         """
+        # Validar parámetros requeridos
+        if not query or not isinstance(query, str):
+            raise InvalidSessionDataError("query debe ser una cadena no vacía")
+        
+        if not query_type or not isinstance(query_type, str):
+            raise InvalidSessionDataError("query_type debe ser una cadena no vacía")
+        
         session = self.get_session(user_id)
         
-        session.last_query = query
-        session.last_query_type = query_type
+        # Sanitizar y asignar valores
+        session.last_query = query.strip()
+        session.last_query_type = query_type.strip()
         
         if month_requested:
-            session.last_month_requested = month_requested
+            session.last_month_requested = month_requested.strip()
         
         if calendar_intent:
-            session.last_calendar_intent = calendar_intent
+            session.last_calendar_intent = calendar_intent.strip()
             
         if time_reference:
-            session.last_time_reference = time_reference
+            session.last_time_reference = time_reference.strip()
         
         if subject_requested:
-            session.last_subject_requested = subject_requested
+            session.last_subject_requested = subject_requested.strip()
         
         if teacher_requested:
-            session.last_teacher_requested = teacher_requested
+            session.last_teacher_requested = teacher_requested.strip()
         
         if procedure_requested:
-            session.last_procedure_requested = procedure_requested
+            session.last_procedure_requested = procedure_requested.strip()
         
         if resource_requested:
-            session.last_resource_requested = resource_requested
+            session.last_resource_requested = resource_requested.strip()
         
         if department_requested:
-            session.last_department_requested = department_requested
+            session.last_department_requested = department_requested.strip()
         
-        if user_name:
-            session.context_data['user_name'] = user_name
+        if user_name and isinstance(user_name, str) and user_name.strip():
+            session.context_data['user_name'] = user_name.strip()
         
         # Agregar datos adicionales al contexto
         for key, value in kwargs.items():
             session.context_data[key] = value
         
-        logger.info(f"Contexto actualizado para {user_id}: tipo={query_type}, mes={month_requested}, calendar_intent={calendar_intent}, time_ref={time_reference}, subject={subject_requested}, teacher={teacher_requested}, procedure={procedure_requested}, resource={resource_requested}")
+        logger.debug(f"Contexto actualizado para {user_id}: tipo={query_type}, mes={month_requested}, calendar_intent={calendar_intent}, time_ref={time_reference}, subject={subject_requested}, teacher={teacher_requested}, procedure={procedure_requested}, resource={resource_requested}")
 
     def get_context_for_relative_query(self, user_id: str, query: str, use_llm: bool = True) -> Dict[str, Any]:
         """
@@ -329,13 +394,45 @@ class SessionService:
             self._sweeper_thread.join(timeout=2)
 
     def get_session_stats(self) -> Dict[str, Any]:
-        """Devuelve estadísticas del servicio de sesiones."""
+        """Devuelve estadísticas detalladas del servicio de sesiones."""
         with self._lock:
             self._cleanup_expired_sessions()
+            
+            # Calcular estadísticas adicionales
+            sessions_by_type = {}
+            oldest_session_age = 0
+            newest_session_age = float('inf')
+            total_context_data_size = 0
+            
+            current_time = time.time()
+            
+            for user_id, session in self.sessions.items():
+                # Estadísticas por tipo de consulta
+                query_type = session.last_query_type or "unknown"
+                sessions_by_type[query_type] = sessions_by_type.get(query_type, 0) + 1
+                
+                # Edad de las sesiones
+                session_age = current_time - session.last_activity
+                oldest_session_age = max(oldest_session_age, session_age)
+                newest_session_age = min(newest_session_age, session_age)
+                
+                # Tamaño del contexto
+                total_context_data_size += len(str(session.context_data))
+            
+            # Si no hay sesiones, ajustar valores
+            if not self.sessions:
+                newest_session_age = 0
+            
             return {
                 "active_sessions": len(self.sessions),
                 "max_sessions": self.max_sessions,
-                "ttl_seconds": self.ttl_seconds
+                "ttl_seconds": self.ttl_seconds,
+                "sessions_by_type": sessions_by_type,
+                "oldest_session_age_seconds": round(oldest_session_age, 2),
+                "newest_session_age_seconds": round(newest_session_age, 2),
+                "average_context_size_bytes": total_context_data_size // len(self.sessions) if self.sessions else 0,
+                "sweeper_active": self._sweeper_thread.is_alive() if self._sweeper_thread else False,
+                "sweeper_interval_seconds": self._sweeper_interval
             }
 
 
@@ -343,28 +440,43 @@ class SessionServiceSingleton:
     """Singleton para el servicio de sesiones con soporte para testing."""
     _instance: Optional[SessionService] = None
     _lock = threading.Lock()
+    _initialized = False
     
     @classmethod
     def get_instance(cls, **kwargs) -> SessionService:
-        """Obtiene o crea la instancia singleton del SessionService."""
+        """
+        Obtiene o crea la instancia singleton del SessionService.
+        
+        IMPORTANTE: Los parámetros solo se usan en la primera inicialización.
+        Llamadas subsecuentes ignoran los parámetros y devuelven la instancia existente.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    # Usar TTL desde settings si está disponible
-                    try:
-                        default_ttl = config.session.ttl_seconds if hasattr(config, 'session') and getattr(config.session, 'ttl_seconds', None) else 1800
-                    except Exception:
-                        default_ttl = 1800
+                    # Solo permitir configuración en la primera inicialización
+                    if cls._initialized and kwargs:
+                        logger.warning(
+                            "SessionServiceSingleton ya fue inicializado. "
+                            "Los parámetros proporcionados serán ignorados. "
+                            "Use reset_instance() para reinicializar con nuevos parámetros."
+                        )
                     
-                    # Permitir override de parámetros para testing
-                    default_kwargs = {
-                        'max_sessions': 1000,
-                        'ttl_seconds': default_ttl,
-                        'enable_background_sweeper': True
-                    }
-                    default_kwargs.update(kwargs)
-                    
-                    cls._instance = SessionService(**default_kwargs)
+                    if not cls._initialized:
+                        # Primera inicialización - usar parámetros proporcionados o defaults
+                        default_kwargs = {
+                            'max_sessions': 1000,
+                            'ttl_seconds': None,  # None para usar config
+                            'enable_background_sweeper': True
+                        }
+                        default_kwargs.update(kwargs)
+                        
+                        cls._instance = SessionService(**default_kwargs)
+                        cls._initialized = True
+                        logger.info("SessionServiceSingleton inicializado por primera vez")
+                    else:
+                        # Si ya fue inicializado pero _instance es None (no debería pasar)
+                        cls._instance = SessionService()
+                        
         return cls._instance
     
     @classmethod
@@ -372,16 +484,26 @@ class SessionServiceSingleton:
         """Reinicia la instancia singleton (útil para testing)."""
         with cls._lock:
             if cls._instance:
-                cls._instance.stop()  # Detener sweeper si está activo
+                try:
+                    cls._instance.stop()  # Detener sweeper si está activo
+                except Exception as e:
+                    logger.warning(f"Error al detener SessionService durante reset: {e}")
             cls._instance = None
+            cls._initialized = False
+            logger.info("SessionServiceSingleton reiniciado")
     
     @classmethod
     def set_instance(cls, instance: SessionService):
         """Establece una instancia específica (útil para testing con mocks)."""
         with cls._lock:
             if cls._instance:
-                cls._instance.stop()
+                try:
+                    cls._instance.stop()
+                except Exception as e:
+                    logger.warning(f"Error al detener SessionService anterior: {e}")
             cls._instance = instance
+            cls._initialized = True
+            logger.info("SessionServiceSingleton configurado con instancia personalizada")
 
 
 # Función de conveniencia para obtener la instancia global

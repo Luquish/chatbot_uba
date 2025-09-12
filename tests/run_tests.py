@@ -39,6 +39,7 @@ from test_session_improvements import TestSessionImprovements
 from test_session_production_flow import TestSessionProductionFlow
 from test_sheets_catalog import TestSheetsCatalog
 from test_session_calendar_consistency import TestSessionCalendarConsistency
+from test_session_exceptions import TestSessionExceptions
 from test_sessions import TestSessions
 from test_vector_services import TestVectorServices
 
@@ -69,6 +70,7 @@ class TestRunner:
             TestSessionProductionFlow(),
             TestSheetsCatalog(),
             TestSessionCalendarConsistency(),
+            TestSessionExceptions(),
             TestSessions(),
             TestVectorServices()
         ]
