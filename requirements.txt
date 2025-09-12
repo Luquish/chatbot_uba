@@ -36,3 +36,10 @@ PyYAML>=6.0.1
 # Análisis de texto y validación
 textblob>=0.17.1
 jsonschema>=4.19.0
+
+# Fuzzy matching y NLP mejorado (2025)
+rapidfuzz>=3.0.0
+fuzzywuzzy>=0.18.0
+python-Levenshtein>=0.21.0
+sentence-transformers>=2.2.0
+spacy>=3.7.0

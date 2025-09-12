@@ -1,7 +1,14 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional
-from utils.text_utils import normalize_text as norm, detect_day_token
+import time
+from typing import Any, Dict, List, Optional, Tuple
+from functools import lru_cache
+from utils.text_utils import normalize_text as norm, detect_day_token, clean_query_for_embedding
+import re
+
+# Librerías modernas para fuzzy matching
+from rapidfuzz import fuzz, process
+from fuzzywuzzy import fuzz as fw_fuzz
 
 from .base import BaseTool, Decision, ToolResult
 from services.sheets_service import SheetsService
@@ -10,24 +17,71 @@ from services.sheets_service import SheetsService
 logger = logging.getLogger(__name__)
 
 
+class SecretariaMatchError(Exception):
+    """Excepción para errores de matching de secretarías."""
+    pass
+
+class SecretariaDataError(Exception):
+    """Excepción para errores de datos de secretarías."""
+    pass
+
 class HorariosSecretariasTool:
     name = "sheets.horarios_secretarias"
-    priority = 64
+    priority = 75
 
     def __init__(self, sheets_service: Optional[SheetsService]):
         self.sheets_service = sheets_service
         self.config: Dict[str, Any] = {
-            'thresholds': { 'accept': 0.6 },
+            'thresholds': { 'accept': 0.4 },
             'triggers': {
                 'keywords': [
+                    # Keywords básicas
                     'secretaria', 'secretaría', 'alumnos', 'admisión', 'admision', 'tesoreria', 'tesorería',
                     'kinesiologia', 'obstetricia', 'hemoterapia', 'podologia', 'radiologia', 'naon',
-                    'archivos', 'actas', 'pases', 'discapacidad', 'genero', 'género', 'seube', 'horario', 'mail', 'ubicacion', 'piso'
+                    'archivos', 'actas', 'pases', 'discapacidad', 'genero', 'género', 'seube', 
+                    'horario', 'mail', 'ubicacion', 'piso',
+                    # Keywords expandidas
+                    'catedra', 'cátedra', 'departamento', 'depto', 'ciclo', 'biomedico', 'biomédico',
+                    'clinico', 'clínico', 'anatomia', 'anatomía', 'histologia', 'histología',
+                    'embriologia', 'embriología', 'fisiologia', 'fisiología', 'bioquimica', 'bioquímica',
+                    'microbiologia', 'microbiología', 'farmacologia', 'farmacología', 'toxicologia',
+                    'toxicología', 'patologia', 'patología', 'inmunologia', 'inmunología', 'bioetica',
+                    'bioética', 'salud mental', 'medicina legal', 'salud publica', 'salud pública',
+                    'familiar', 'enfermeria', 'enfermería', 'fonoaudiologia', 'fonoaudiología',
+                    'nutricion', 'nutrición', 'cosmetologia', 'cosmetología', 'prac cardio',
+                    'museo', 'uba xxi', 'actas certificaciones', 'títulos', 'graduados', 'posgrados',
+                    'conexas', 'simultaneidad', 'ciclo biomedico', 'ciclo clinico'
                 ]
             },
             'spreadsheet_id': None,
             'sheet_name': 'Hoja 1',
-            'ranges': { 'default': 'A:J' }
+            'ranges': { 'default': 'A:J' },
+            'cache_ttl': 1800  # 30 minutos de caché
+        }
+        
+        # Alias para mejorar matching
+        self.alias_map = {
+            'admision': 'admisión',
+            'tesoreria': 'tesorería',
+            'radiologia': 'radiología',
+            'genero': 'género',
+            'anatomia': 'anatomía',
+            'catedra': 'cátedra',
+            'histologia': 'histología',
+            'embriologia': 'embriología',
+            'fisiologia': 'fisiología',
+            'bioquimica': 'bioquímica',
+            'farmacologia': 'farmacología',
+            'microbiologia': 'microbiología',
+            'toxicologia': 'toxicología',
+            'patologia': 'patología',
+            'inmunologia': 'inmunología'
+        }
+        
+        # Stop words para limpiar consultas
+        self.stop_words = {
+            'sec', 'se', 'secretaria', 'secretaría', 'de', 'del', 'la', 'el', 'donde', 'dónde', 
+            'está', 'esta', 'queda', 'catedra', 'cátedra', 'todas', 'todos'
         }
 
     def configure(self, config: Dict[str, Any]) -> None:
@@ -39,7 +93,167 @@ class HorariosSecretariasTool:
             config['spreadsheet_id'] = os.getenv(env_key)
         self.config.update(config)
 
+    def _normalize_text(self, text: str) -> str:
+        """Normaliza texto aplicando alias y limpieza mejorada."""
+        # Usar la función existente de text_utils
+        normalized = norm(text).lower()
+        
+        # Aplicar alias para mejorar matching
+        for alias, canonical in self.alias_map.items():
+            normalized = normalized.replace(alias, canonical)
+        
+        # Limpieza adicional para embeddings
+        normalized = clean_query_for_embedding(normalized)
+        
+        return normalized
+    
+    def _extract_query_components(self, query: str) -> Dict[str, Any]:
+        """Extrae componentes semánticos de la consulta."""
+        normalized = self._normalize_text(query)
+        
+        # Patrones para extraer información específica
+        patterns = {
+            'catedra_num': r'c[aá]tedra\s*(\d+)',
+            'ciclo': r'(biomedico|biom[eé]dico|clinico|cl[ií]nico)',
+            'area': r'(anatomia|anatomía|histologia|histología|embriologia|embriología|'
+                    r'fisiologia|fisiología|bioquimica|bioquímica|microbiologia|microbiología|'
+                    r'farmacologia|farmacología|toxicologia|toxicología|patologia|patología|'
+                    r'inmunologia|inmunología|bioetica|bioética|salud\s*mental|medicina\s*legal|'
+                    r'salud\s*publica|salud\s*pública)',
+            'departamento': r'(alumnos?|admisi[oó]n|tesorer[ií]a|t[ií]tulos?|graduados?|posgrados?|'
+                           r'conexas?|archivos?|actas?|certificaciones?|pases?|simultaneidad)',
+            'especialidad': r'(enfermer[ií]a|obstetricia|hemoterapia|podolog[ií]a|radiolog[ií]a|'
+                           r'kinesiolog[ií]a|nutrici[oó]n|cosmetolog[ií]a|fonoaudiolog[ií]a)',
+            'especial': r'(museo\s*na[oó]n|uba\s*xxi|seube|depto\.\s*discapacidad|depto\.\s*g[eé]nero)'
+        }
+        
+        components = {
+            'original': query,
+            'normalized': normalized,
+            'catedra_num': None,
+            'area': None,
+            'departamento': None,
+            'especialidad': None,
+            'especial': None,
+            'ciclo': None
+        }
+        
+        # Extraer componentes usando regex
+        for key, pattern in patterns.items():
+            match = re.search(pattern, normalized, re.IGNORECASE)
+            if match:
+                if key == 'catedra_num':
+                    components[key] = match.group(1)
+                else:
+                    components[key] = match.group(0)
+        
+        # Extraer keywords restantes
+        words_to_remove = ['secretaria', 'secretaría', 'donde', 'dónde', 'esta', 'está', 
+                          'queda', 'de', 'del', 'la', 'el', 'los', 'las']
+        words = [w for w in normalized.split() if w not in words_to_remove and len(w) > 2]
+        components['keywords'] = words
+        
+        return components
+    
+    def _calculate_match_score(self, query_components: Dict[str, Any], secretaria_name: str) -> Tuple[float, Dict[str, Any]]:
+        """Calcula un score sofisticado de matching usando librerías modernas."""
+        name_normalized = self._normalize_text(secretaria_name)
+        query_normalized = query_components['normalized']
+        
+        score = 0.0
+        match_details = {
+            'exact_match': False,
+            'partial_matches': [],
+            'component_matches': {},
+            'fuzzy_scores': {}
+        }
+        
+        # 1. Coincidencia exacta (máximo score)
+        if query_normalized in name_normalized or name_normalized in query_normalized:
+            score = 1.0
+            match_details['exact_match'] = True
+            return score, match_details
+        
+        # 2. Fuzzy matching moderno con rapidfuzz
+        ratio_score = fuzz.ratio(query_normalized, name_normalized) / 100.0
+        partial_score = fuzz.partial_ratio(query_normalized, name_normalized) / 100.0
+        token_sort_score = fuzz.token_sort_ratio(query_normalized, name_normalized) / 100.0
+        token_set_score = fuzz.token_set_ratio(query_normalized, name_normalized) / 100.0
+        
+        # Combinar scores de fuzzy matching con pesos optimizados
+        fuzzy_score = (ratio_score * 0.3 + partial_score * 0.25 + token_sort_score * 0.25 + token_set_score * 0.2)
+        
+        match_details['fuzzy_scores'] = {
+            'ratio': ratio_score,
+            'partial': partial_score,
+            'token_sort': token_sort_score,
+            'token_set': token_set_score,
+            'combined': fuzzy_score
+        }
+        
+        # Si el fuzzy score es muy alto, usarlo como base
+        if fuzzy_score > 0.7:
+            score = fuzzy_score
+        
+        # 3. Matching por componentes específicos (mejorado)
+        component_weights = {
+            'area': 0.4,
+            'catedra_num': 0.3,
+            'departamento': 0.5,
+            'especialidad': 0.5,
+            'especial': 0.6,
+            'ciclo': 0.4
+        }
+        
+        for component, weight in component_weights.items():
+            if query_components[component]:
+                component_value = query_components[component]
+                if component_value in name_normalized:
+                    score += weight
+                    match_details['component_matches'][component] = True
+                elif component == 'catedra_num':
+                    # Buscar número de cátedra en el nombre
+                    if f"catedra {component_value}" in name_normalized or f"cátedra {component_value}" in name_normalized:
+                        score += weight
+                        match_details['component_matches'][component] = True
+        
+        # 4. Fuzzy matching mejorado para keywords individuales
+        if query_components['keywords']:
+            keyword_scores = []
+            for keyword in query_components['keywords']:
+                # Usar rapidfuzz para cada keyword
+                keyword_ratio = fuzz.ratio(keyword, name_normalized) / 100.0
+                keyword_partial = fuzz.partial_ratio(keyword, name_normalized) / 100.0
+                
+                # Buscar la mejor coincidencia de la keyword
+                best_keyword_score = max(keyword_ratio, keyword_partial)
+                
+                if best_keyword_score > 0.6:  # Threshold más bajo para capturar más coincidencias
+                    keyword_scores.append(best_keyword_score)
+                    match_details['partial_matches'].append((keyword, best_keyword_score))
+            
+            if keyword_scores:
+                avg_keyword_score = sum(keyword_scores) / len(keyword_scores)
+                # Ponderar por cantidad de keywords que matchearon
+                match_ratio = len(keyword_scores) / len(query_components['keywords'])
+                score += (avg_keyword_score * match_ratio) * 0.3
+        
+        # 5. Penalización si hay componentes que NO coinciden
+        if query_components['catedra_num'] and 'catedra' in name_normalized.lower():
+            # Si pide cátedra específica pero no coincide el número
+            catedra_pattern = r'c[aá]tedra\s*(\d+)'
+            name_match = re.search(catedra_pattern, name_normalized, re.IGNORECASE)
+            if name_match and name_match.group(1) != query_components['catedra_num']:
+                score *= 0.3  # Penalización fuerte
+        
+        # 6. Si no hay score por componentes, usar fuzzy score como fallback
+        if score == 0.0 and fuzzy_score > 0.3:
+            score = fuzzy_score * 0.8  # Reducir un poco para dar prioridad a matches específicos
+        
+        return min(score, 1.0), match_details
+    
     def _rule_score(self, query: str) -> float:
+        """Calcula score basado en keywords de la consulta."""
         ql = norm(query)
         hits = sum(1 for k in self.config.get('triggers', {}).get('keywords', []) if k in ql)
         return min(1.0, 0.2 * hits) if hits else 0.0
@@ -53,161 +267,305 @@ class HorariosSecretariasTool:
     def accepts(self, score: float) -> bool:
         return score >= float(self.config.get('thresholds', {}).get('accept', 0.6))
 
-    def execute(self, query: str, params: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
-        sid = self.config.get('spreadsheet_id')
-        if not sid:
-            return ToolResult(response="", sources=[], metadata={})
+    @lru_cache(maxsize=1)
+    def _fetch_sheet_data(self) -> List[List[str]]:
+        """Obtiene datos del sheet con manejo de errores y caché."""
+        try:
+            sid = self.config.get('spreadsheet_id')
+            if not sid:
+                raise SecretariaDataError("spreadsheet_id no configurado")
 
-        sheet_name = self.config.get('sheet_name', 'Hoja 1')
-        rng = self.config.get('ranges', {}).get('default', 'A:J')
-        a1 = f"'{sheet_name}'!{rng}"
-        values = self.sheets_service.get_sheet_values(sid, a1)
-        if not values or len(values) < 2:
-            return ToolResult(response="", sources=[], metadata={})
+            sheet_name = self.config.get('sheet_name', 'Hoja 1')
+            rng = self.config.get('ranges', {}).get('default', 'A:J')
+            a1 = f"'{sheet_name}'!{rng}"
+            
+            logger.info(f"Solicitando valores de la hoja de cálculo {sid} para el rango: {a1}")
+            values = self.sheets_service.get_sheet_values(sid, a1)
+            
+            if not values or len(values) < 2:
+                raise SecretariaDataError("No hay datos en el sheet o datos insuficientes")
+            
+            logger.info(f"Valores obtenidos exitosamente de {sid} para el rango {a1}. Total filas: {len(values)}")
+            return values[1:]  # Omitir header
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo datos del sheet: {e}")
+            raise SecretariaDataError(f"Error accediendo al sheet: {e}")
+    
+    def _clear_cache(self):
+        """Limpia el caché de datos del sheet."""
+        self._fetch_sheet_data.cache_clear()
 
-        # Estructura esperada: A: NOMBRE SECRETARIA, B-F: L M W J V (marcas), G: HORARIO, H: SECTOR, I: PISO, J: MAIL
-        header_idx = 0
-        data_start = header_idx + 1
-        rows = values[data_start:]
-
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parsea la consulta para extraer la intención del usuario."""
         ql = norm(query)
-
-        # Utilidades de interpretación
-        def detect_day(q: str):
-            return detect_day_token(q)
-
+        
+        # Detectar tipo de información solicitada
         ask_mail = any(w in ql for w in ['mail', 'correo', 'email'])
         ask_horario = any(w in ql for w in ['horario', 'hora', 'desde', 'hasta', 'atiende', 'abren', 'abre', 'cierra'])
         ask_ubicacion = any(w in ql for w in ['ubicacion', 'ubicación', 'donde', 'dónde', 'sector'])
         ask_piso = 'piso' in ql
         ask_dias = any(w in ql for w in ['dias', 'días', 'que dia', 'que dias', 'qué dia', 'qué dias'])
-        day_requested = detect_day(ql)
-
-        # Alias comunes para mejorar el match
-        alias = {
-            'admision': 'admisión',
-            'tesoreria': 'tesorería',
-            'radiologia': 'radiología',
-            'genero': 'género',
+        
+        # Detectar día específico
+        day_requested = detect_day_token(ql)
+        
+        # Detectar si se solicitan todas las secretarías
+        ask_all = any(w in ql for w in ['todas', 'todos', 'completa', 'lista'])
+        
+        # Obtener componentes semánticos
+        components = self._extract_query_components(query)
+        
+        return {
+            'ask_mail': ask_mail,
+            'ask_horario': ask_horario,
+            'ask_ubicacion': ask_ubicacion,
+            'ask_piso': ask_piso,
+            'ask_dias': ask_dias,
+            'day_requested': day_requested,
+            'ask_all': ask_all,
+            'components': components
         }
 
-        stop = {'sec', 'se', 'secretaria', 'secretaria de', 'secretaria del', 'secretaria de la', 'secretaria de el'}
+    def _find_matching_secretarias(self, query_components: Dict[str, Any], rows: List[List[str]]) -> List[Tuple[float, List[str], Dict[str, Any]]]:
+        """Encuentra secretarías que coincidan usando el sistema de scoring mejorado."""
+        matches = []
+        
+        for row in rows:
+            if not row or len(row) < 10:
+                continue
+                
+            name = str(row[0]).strip()
+            if not name:
+                continue
+            
+            # Calcular score usando el sistema mejorado
+            score, match_details = self._calculate_match_score(query_components, name)
+            
+            # Threshold más inteligente basado en el tipo de match
+            if score > 0.15 or match_details.get('exact_match') or any(match_details.get('component_matches', {}).values()):
+                matches.append((score, row, match_details))
+                logger.info(f"Match encontrado: {name} (score: {score:.3f}, detalles: {match_details})")
+        
+        # Ordenar por score descendente
+        matches.sort(key=lambda x: x[0], reverse=True)
+        return matches
 
-        def name_score(name: str) -> int:
-            n = norm(name)
-            n = alias.get(n, n)
-            tokens = [t for t in n.split() if t not in stop]
-            return sum(1 for t in tokens if t in ql)
-
+    def _format_secretaria_info(self, row: List[str], intent: Dict[str, Any]) -> str:
+        """Formatea la información de una secretaría según la intención."""
+        name = str(row[0]).strip()
+        
+        # Extraer datos de la fila
         def day_flag(v: Any) -> str:
             return "✔" if str(v).strip() else "—"
-
-        # Buscar mejor coincidencia por nombre si la consulta sugiere una secretaría
-        best_row: Optional[List[Any]] = None
-        best_score = 0
-        for r in rows:
-            if not r or len(r) < 10:
-                continue
-            name = str(r[0]).strip()
-            sc = name_score(name)
-            if sc > best_score:
-                best_score = sc
-                best_row = r
-
-        # Funciones de formato
+        
+        Ld = day_flag(row[1] if len(row) > 1 else "")
+        Md = day_flag(row[2] if len(row) > 2 else "")
+        Wd = day_flag(row[3] if len(row) > 3 else "")
+        Jd = day_flag(row[4] if len(row) > 4 else "")
+        Vd = day_flag(row[5] if len(row) > 5 else "")
+        horario = str(row[6]).strip() if len(row) > 6 else ""
+        sector = str(row[7]).strip() if len(row) > 7 else ""
+        piso = str(row[8]).strip() if len(row) > 8 else ""
+        mail = str(row[9]).strip() if len(row) > 9 else ""
+        
         def format_days(Ld: str, Md: str, Wd: str, Jd: str, Vd: str) -> str:
             return f"L:{Ld} M:{Md} W:{Wd} J:{Jd} V:{Vd}"
+        
+        # Respuestas específicas según la intención
+        if intent['day_requested']:
+            map_back = {'L': 'lunes', 'M': 'martes', 'W': 'miércoles', 'J': 'jueves', 'V': 'viernes'}
+            open_flag = {
+                'L': Ld, 'M': Md, 'W': Wd, 'J': Jd, 'V': Vd
+            }.get(intent['day_requested'], '—')
+            
+            if open_flag == '✔':
+                return f"✅ {name} atiende el {map_back.get(intent['day_requested'])}. HORARIO: {horario}"
+            else:
+                return f"⚠️ {name} NO atiende el {map_back.get(intent['day_requested'])}."
+        
+        # Respuestas enfocadas en un tipo de información
+        exclusive_asks = sum([intent['ask_mail'], intent['ask_horario'], intent['ask_ubicacion'], intent['ask_piso'], intent['ask_dias']])
+        
+        if exclusive_asks == 1:
+            if intent['ask_mail']:
+                return f"✉️ {name}: {mail}"
+            elif intent['ask_ubicacion']:
+                return f"📍 {name}: SECTOR {sector}"
+            elif intent['ask_piso']:
+                return f"🏢 {name}: PISO {piso}"
+            elif intent['ask_horario']:
+                return f"🕒 {name}: {horario}"
+            elif intent['ask_dias']:
+                return f"📅 {name}: {format_days(Ld, Md, Wd, Jd, Vd)}"
+        
+        # Respuesta completa por defecto
+        return (
+            f"{name}\n- DÍAS: {format_days(Ld, Md, Wd, Jd, Vd)}\n"
+            f"- HORARIO: {horario}\n- SECTOR: {sector} | PISO: {piso}\n- MAIL: {mail}"
+        )
 
-        def day_flag(v: Any) -> str:
-            return "✔" if str(v).strip() else "—"
-
-        # Si hay una secretaría objetivo
-        if best_row and best_score > 0:
-            name = str(best_row[0]).strip()
-            Ld = day_flag(best_row[1] if len(best_row) > 1 else "")
-            Md = day_flag(best_row[2] if len(best_row) > 2 else "")
-            Wd = day_flag(best_row[3] if len(best_row) > 3 else "")
-            Jd = day_flag(best_row[4] if len(best_row) > 4 else "")
-            Vd = day_flag(best_row[5] if len(best_row) > 5 else "")
-            horario = str(best_row[6]).strip() if len(best_row) > 6 else ""
-            sector = str(best_row[7]).strip() if len(best_row) > 7 else ""
-            piso = str(best_row[8]).strip() if len(best_row) > 8 else ""
-            mail = str(best_row[9]).strip() if len(best_row) > 9 else ""
-
-            # Filtros específicos
-            if day_requested:
-                map_back = {'L': 'lunes', 'M': 'martes', 'W': 'miércoles', 'J': 'jueves', 'V': 'viernes'}
-                open_flag = {
-                    'L': Ld, 'M': Md, 'W': Wd, 'J': Jd, 'V': Vd
-                }.get(day_requested, '—')
-                if open_flag == '✔':
-                    return ToolResult(
-                        response=f"✅ {name} atiende el {map_back.get(day_requested)}. HORARIO: {horario}",
-                        sources=["Google Sheet Horarios Secretarías"],
-                        metadata={"name": name, "day": day_requested, "open": True}
-                    )
+    def execute(self, query: str, params: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
+        """Ejecuta la búsqueda de secretarías con manejo robusto de errores y logging mejorado."""
+        start_time = time.time()
+        
+        try:
+            logger.info(f"Procesando consulta de secretarías: {query}")
+            
+            # 1. Obtener datos del sheet (con caché)
+            rows = self._fetch_sheet_data()
+            
+            # 2. Parsear intención de la consulta
+            intent = self._parse_query_intent(query)
+            logger.debug(f"Intención parseada: {intent}")
+            
+            # 3. Verificar si se piden todas las secretarías explícitamente
+            if intent['ask_all']:
+                logger.info("Usuario pidió explícitamente todas las secretarías")
+                result = self._format_all_secretarias(rows, intent)
+                logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+                return result
+            
+            # 4. Buscar coincidencias usando el sistema de scoring mejorado
+            matches = self._find_matching_secretarias(intent['components'], rows)
+            
+            if not matches:
+                logger.warning(f"No se encontraron coincidencias para: {intent['components']}")
+                # Si no hay matches y la consulta es muy genérica, devolver todas
+                if not intent['components']['area'] and not intent['components']['departamento'] and not intent['components']['especialidad']:
+                    result = self._format_all_secretarias(rows, intent)
+                    logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+                    return result
                 else:
-                    return ToolResult(
-                        response=f"⚠️ {name} NO atiende el {map_back.get(day_requested)}.",
+                    # Si había componentes específicos pero no matchearon, informar error
+                    result = ToolResult(
+                        response=f"❌ No encontré la secretaría que buscas. Por favor verifica el nombre o consulta la lista completa.",
                         sources=["Google Sheet Horarios Secretarías"],
-                        metadata={"name": name, "day": day_requested, "open": False}
+                        metadata={"match_type": "none", "query_components": intent['components']}
                     )
-
-            # Respuestas enfocadas
-            if ask_mail and not (ask_horario or ask_ubicacion or ask_piso or ask_dias):
-                return ToolResult(response=f"✉️ {name}: {mail}", sources=["Google Sheet Horarios Secretarías"], metadata={"name": name, "mail": mail})
-            if ask_ubicacion and not (ask_mail or ask_piso or ask_horario or ask_dias):
-                return ToolResult(response=f"📍 {name}: SECTOR {sector}", sources=["Google Sheet Horarios Secretarías"], metadata={"name": name, "sector": sector})
-            if ask_piso and not (ask_mail or ask_ubicacion or ask_horario or ask_dias):
-                return ToolResult(response=f"🏢 {name}: PISO {piso}", sources=["Google Sheet Horarios Secretarías"], metadata={"name": name, "piso": piso})
-            if ask_horario and not (ask_mail or ask_ubicacion or ask_piso or ask_dias):
-                return ToolResult(response=f"🕒 {name}: {horario}", sources=["Google Sheet Horarios Secretarías"], metadata={"name": name, "horario": horario})
-            if ask_dias and not (ask_mail or ask_ubicacion or ask_piso or ask_horario):
-                return ToolResult(response=f"📅 {name}: {format_days(Ld, Md, Wd, Jd, Vd)}", sources=["Google Sheet Horarios Secretarías"], metadata={"name": name})
-
-            # Respuesta completa por defecto para la secretaría
-            text = (
-                f"{name}\n- DÍAS: {format_days(Ld, Md, Wd, Jd, Vd)}\n"
-                f"- HORARIO: {horario}\n- SECTOR: {sector} | PISO: {piso}\n- MAIL: {mail}"
+                    logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+                    return result
+            
+            # 5. Analizar scores para determinar qué devolver
+            best_match = matches[0]
+            score, row, match_details = best_match
+            
+            # Si hay coincidencia excelente (>0.7), devolver solo esa
+            if score > 0.7:
+                logger.info(f"Coincidencia específica encontrada: {row[0]} (score: {score:.3f})")
+                response = self._format_secretaria_info(row, intent)
+                result = ToolResult(
+                    response=response,
+                    sources=["Google Sheet Horarios Secretarías"],
+                    metadata={
+                        "name": row[0], 
+                        "score": score, 
+                        "match_type": "specific",
+                        "match_details": match_details
+                    }
+                )
+                logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+                return result
+            
+            # Si hay varias coincidencias buenas (>0.4), devolver las mejores
+            good_matches = [(s, r, d) for s, r, d in matches if s > 0.4]
+            if 1 <= len(good_matches) <= 5:
+                logger.info(f"Devolviendo {len(good_matches)} coincidencias buenas")
+                result = self._format_multiple_secretarias(good_matches, intent)
+                logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+                return result
+            
+            # Si el mejor score es bajo (<0.4) o hay demasiadas coincidencias
+            if score < 0.4:
+                logger.info(f"Score muy bajo ({score:.3f}), buscando alternativas")
+                # Si pidió algo específico pero el match es malo, sugerir alternativas
+                result = ToolResult(
+                    response=f"🔍 No encontré exactamente lo que buscas. Estas son las opciones más cercanas:\n\n" + 
+                            self._format_multiple_secretarias(matches[:3], intent).response,
+                    sources=["Google Sheet Horarios Secretarías"],
+                    metadata={"match_type": "suggestions", "best_score": score}
+                )
+                logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+                return result
+            
+            # Si hay demasiadas coincidencias mediocres, mostrar las mejores
+            logger.info("Múltiples coincidencias parciales, mostrando las mejores")
+            result = self._format_multiple_secretarias(matches[:5], intent)
+            logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+            return result
+            
+        except SecretariaDataError as e:
+            logger.error(f"Error de datos: {e}")
+            result = ToolResult(
+                response="⚠️ Error temporal accediendo a los datos de secretarías. Intenta nuevamente.",
+                sources=[],
+                metadata={"error": "data_error", "message": str(e)}
             )
-            return ToolResult(response=text, sources=["Google Sheet Horarios Secretarías"], metadata={"name": name})
+            logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+            return result
+        except Exception as e:
+            logger.error(f"Error inesperado en HorariosSecretariasTool: {e}")
+            result = ToolResult(
+                response="❌ Error interno procesando la consulta. Contacta al administrador.",
+                sources=[],
+                metadata={"error": "internal_error", "message": str(e)}
+            )
+            logger.info(f"Consulta completada en {time.time() - start_time:.2f}s")
+            return result
 
-        # Si no hay una secretaría específica detectada, se puede listar según filtros globales (ej. por día)
-        results: List[str] = []
-        for r in rows:
-            if not r or len(r) < 10:
+    def _format_multiple_secretarias(self, matches: List[Tuple[float, List[str], Dict[str, Any]]], intent: Dict[str, Any]) -> ToolResult:
+        """Formatea múltiples secretarías encontradas."""
+        results = []
+        for score, row, match_details in matches:
+            formatted = self._format_secretaria_info(row, intent)
+            # Agregar score para transparencia en matches parciales
+            if score < 0.7:
+                formatted += f"\n  📊 Coincidencia: {score*100:.0f}%"
+            results.append(formatted)
+        
+        response = "🏢 SECRETARÍAS ENCONTRADAS\n\n" + "\n\n".join(results)
+        return ToolResult(
+            response=response,
+            sources=["Google Sheet Horarios Secretarías"],
+            metadata={"match_type": "multiple", "count": len(matches), "scores": [m[0] for m in matches]}
+        )
+
+    def _format_all_secretarias(self, rows: List[List[str]], intent: Dict[str, Any]) -> ToolResult:
+        """Formatea todas las secretarías disponibles."""
+        results = []
+        
+        for row in rows:
+            if not row or len(row) < 10:
                 continue
-            name = str(r[0]).strip()
-            Ld = day_flag(r[1] if len(r) > 1 else "")
-            Md = day_flag(r[2] if len(r) > 2 else "")
-            Wd = day_flag(r[3] if len(r) > 3 else "")
-            Jd = day_flag(r[4] if len(r) > 4 else "")
-            Vd = day_flag(r[5] if len(r) > 5 else "")
-            horario = str(r[6]).strip() if len(r) > 6 else ""
-            sector = str(r[7]).strip() if len(r) > 7 else ""
-            piso = str(r[8]).strip() if len(r) > 8 else ""
-            mail = str(r[9]).strip() if len(r) > 9 else ""
-
-            if day_requested:
-                open_flag = {'L': Ld, 'M': Md, 'W': Wd, 'J': Jd, 'V': Vd}.get(day_requested, '—')
-                if open_flag != '✔':
-                    continue
-
-            results.append(
-                f"{name}\n- DÍAS: {format_days(Ld, Md, Wd, Jd, Vd)}\n- HORARIO: {horario}\n- SECTOR: {sector} | PISO: {piso}\n- MAIL: {mail}"
-            )
-
+            
+            # Filtrar por día si se especifica
+            if intent['day_requested']:
+                day_map = {'L': 1, 'M': 2, 'W': 3, 'J': 4, 'V': 5}
+                day_idx = day_map.get(intent['day_requested'])
+                if day_idx and len(row) > day_idx:
+                    day_flag = "✔" if str(row[day_idx]).strip() else "—"
+                    if day_flag != '✔':
+                        continue
+            
+            formatted = self._format_secretaria_info(row, intent)
+            results.append(formatted)
+        
         if not results:
-            return ToolResult(response="", sources=[], metadata={})
-
+            return ToolResult(
+                response="❌ No se encontraron secretarías que coincidan con tu consulta.",
+                sources=["Google Sheet Horarios Secretarías"],
+                metadata={"match_type": "none"}
+            )
+        
+        # Limitar a 8 resultados para evitar respuestas muy largas
         preview = "\n\n".join(results[:8])
         if len(results) > 8:
-            preview += f"\n\n(+{len(results)-8} más)"
-
+            preview += f"\n\n(+{len(results)-8} más secretarías disponibles)"
+        
         return ToolResult(
             response=f"🏢 HORARIOS DE SECRETARÍAS\n\n{preview}",
             sources=["Google Sheet Horarios Secretarías"],
-            metadata={}
+            metadata={"match_type": "all", "total_count": len(results), "shown_count": min(8, len(results))}
         )
 
 

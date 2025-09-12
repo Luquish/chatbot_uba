@@ -58,11 +58,28 @@ tools:
       default: "A:D"
 
   - name: sheets.horarios_secretarias
-    priority: 64
+    priority: 75
     triggers:
-      keywords: ["secretaria", "secretaría", "alumnos", "admisión", "admision", "tesoreria", "tesorería", "kinesiologia", "obstetricia", "hemoterapia", "podologia", "radiologia", "naon", "archivos", "actas", "pases", "discapacidad", "genero", "género", "seube", "ubicacion", "piso", "horario", "mail"]
+      keywords: [
+        # Keywords básicas
+        "secretaria", "secretaría", "alumnos", "admisión", "admision", "tesoreria", "tesorería", 
+        "kinesiologia", "obstetricia", "hemoterapia", "podologia", "radiologia", "naon", 
+        "archivos", "actas", "pases", "discapacidad", "genero", "género", "seube", 
+        "ubicacion", "piso", "horario", "mail",
+        # Keywords expandidas para mejor cobertura
+        "catedra", "cátedra", "departamento", "depto", "ciclo", "biomedico", "biomédico", 
+        "clinico", "clínico", "anatomia", "anatomía", "histologia", "histología", 
+        "embriologia", "embriología", "fisiologia", "fisiología", "bioquimica", "bioquímica", 
+        "microbiologia", "microbiología", "farmacologia", "farmacología", "toxicologia", 
+        "toxicología", "patologia", "patología", "inmunologia", "inmunología", "bioetica", 
+        "bioética", "salud mental", "medicina legal", "salud publica", "salud pública", 
+        "familiar", "enfermeria", "enfermería", "fonoaudiologia", "fonoaudiología", 
+        "nutricion", "nutrición", "cosmetologia", "cosmetología", "prac cardio", 
+        "museo", "uba xxi", "actas certificaciones", "títulos", "graduados", "posgrados", 
+        "conexas", "simultaneidad", "ciclo biomedico", "ciclo clinico"
+      ]
     thresholds:
-      accept: 0.6
+      accept: 0.4
     spreadsheet_id: "1GyKQXDdujbnAhfnWehcd8W9_jKzErlVmYhRHAvOV83U"
     sheet_name: "Hoja 1"
     ranges:
