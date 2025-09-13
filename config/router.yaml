@@ -96,6 +96,30 @@ tools:
     ranges:
       default: "A:A"
 
+  - name: sheets.contactos_secretarias
+    priority: 70
+    triggers:
+      keywords: [
+        # Keywords básicas
+        "contacto", "mail", "email", "correo", "secretaria", "secretaría",
+        "hospital", "hospitales", "udh", "unidad docente hospitalaria",
+        # Nombres de hospitales específicos
+        "aeronautico", "alvarez", "alvear", "argerich", "avellaneda", "borda",
+        "churruca", "clinicas", "clínicas", "catedra", "cátedra",
+        # Departamentos
+        "medicina", "cirugia", "cirugía", "dermatologia", "dermatología",
+        "primera", "segunda", "tercera", "cuarta", "quinta", "sexta", "septima",
+        "1ra", "2da", "3ra", "4ta", "5ta", "6ta", "7ma",
+        # Términos de búsqueda
+        "donde", "dónde", "ubicacion", "ubicación", "direccion", "dirección"
+      ]
+    thresholds:
+      accept: 0.5
+    spreadsheet_id: "19t4GasPKs2_Th-2YofT62KgPtfkJDlhLr7fR8Y2iJ4I"
+    sheet_name: "Hoja 1"
+    ranges:
+      default: "A:B"
+
   - name: rag
     priority: 10
     thresholds:

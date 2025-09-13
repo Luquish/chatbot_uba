@@ -43,3 +43,13 @@ fuzzywuzzy>=0.18.0
 python-Levenshtein>=0.21.0
 sentence-transformers>=2.2.0
 spacy>=3.7.0
+
+# Google Maps y geolocalización (2025)
+googlemaps>=4.10.0
+folium>=0.14.0
+geopandas>=0.14.0
+
+# Web scraping y extracción de datos
+selenium>=4.15.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0

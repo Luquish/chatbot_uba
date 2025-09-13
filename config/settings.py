@@ -93,9 +93,10 @@ class TelegramSettings(BaseSettings):
 
 
 class GoogleApisSettings(BaseSettings):
-    """Configuración de Google APIs (Calendar y Sheets)."""
+    """Configuración de Google APIs (Calendar, Sheets y Maps)."""
     
     google_api_key: str = Field(default='', env='GOOGLE_API_KEY')
+    google_maps_api_key: Optional[str] = Field(default=None, env='GOOGLE_MAPS_API_KEY')
     cursos_spreadsheet_id: str = Field(default='', env='CURSOS_SPREADSHEET_ID')
     
     # Google Calendar IDs
@@ -103,8 +104,6 @@ class GoogleApisSettings(BaseSettings):
     calendar_id_inscripciones: Optional[str] = Field(default=None, env='CALENDAR_ID_INSCRIPCIONES')
     calendar_id_cursada: Optional[str] = Field(default=None, env='CALENDAR_ID_CURSADA')
     calendar_id_tramites: Optional[str] = Field(default=None, env='CALENDAR_ID_TRAMITES')
-    
-
     
     class Config:
         env_prefix = ''
@@ -282,12 +281,12 @@ class ChatbotConfig(BaseSettings):
             },
             'google_apis': {
                 'api_key': self.google_apis.google_api_key,
+                'maps_api_key': self.google_apis.google_maps_api_key,
                 'cursos_spreadsheet_id': self.google_apis.cursos_spreadsheet_id,
                 'calendar_examenes': self.google_apis.calendar_id_examenes,
                 'calendar_inscripciones': self.google_apis.calendar_id_inscripciones,
                 'calendar_cursada': self.google_apis.calendar_id_cursada,
                 'calendar_tramites': self.google_apis.calendar_id_tramites,
-
             },
             'server': {
                 'environment': self.server.environment,
@@ -360,6 +359,7 @@ TELEGRAM_ADMIN_USER_ID = config.telegram.telegram_admin_user_id
 
 # Google APIs
 GOOGLE_API_KEY = config.google_apis.google_api_key
+GOOGLE_MAPS_API_KEY = config.google_apis.google_maps_api_key
 CURSOS_SPREADSHEET_ID = config.google_apis.cursos_spreadsheet_id
 CALENDAR_ID_EXAMENES = config.google_apis.calendar_id_examenes
 CALENDAR_ID_INSCRIPCIONES = config.google_apis.calendar_id_inscripciones
@@ -406,4 +406,5 @@ if __name__ != '__main__':
     logger.info(f"Configuración cargada para entorno: {ENVIRONMENT}")
     logger.info(f"Usando GCS: {USE_GCS}")
     logger.info(f"Telegram configurado: {bool(TELEGRAM_BOT_TOKEN)}")
-    logger.info(f"Google APIs configuradas: {bool(GOOGLE_API_KEY)}") 
+    logger.info(f"Google APIs configuradas: {bool(GOOGLE_API_KEY)}")
+    logger.info(f"Google Maps API configurada: {bool(GOOGLE_MAPS_API_KEY)}") 

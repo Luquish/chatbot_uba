@@ -10,7 +10,7 @@ import re
 from rapidfuzz import fuzz, process
 from fuzzywuzzy import fuzz as fw_fuzz
 
-from .base import BaseTool, Decision, ToolResult
+from .base import BaseTool, Decision, ToolResult, SheetsBaseTool, MatchDetails
 from services.sheets_service import SheetsService
 
 
@@ -25,14 +25,14 @@ class SecretariaDataError(Exception):
     """Excepción para errores de datos de secretarías."""
     pass
 
-class HorariosSecretariasTool:
+class HorariosSecretariasTool(SheetsBaseTool):
     name = "sheets.horarios_secretarias"
     priority = 75
 
     def __init__(self, sheets_service: Optional[SheetsService]):
-        self.sheets_service = sheets_service
-        self.config: Dict[str, Any] = {
-            'thresholds': { 'accept': 0.4 },
+        # Configuración específica para secretarías
+        default_config = {
+            'thresholds': {'accept': 0.4},
             'triggers': {
                 'keywords': [
                     # Keywords básicas
@@ -55,9 +55,25 @@ class HorariosSecretariasTool:
             },
             'spreadsheet_id': None,
             'sheet_name': 'Hoja 1',
-            'ranges': { 'default': 'A:J' },
-            'cache_ttl': 1800  # 30 minutos de caché
+            'ranges': {'default': 'A:J'},
+            'caching': {
+                'enabled': True,
+                'ttl_minutes': 30  # 30 minutos de caché
+            },
+            'fuzzy_matching': {
+                'enabled': True,
+                'threshold': 0.7,
+                'weights': {
+                    'ratio': 0.3,
+                    'partial': 0.25,
+                    'token_sort': 0.25,
+                    'token_set': 0.2
+                }
+            }
         }
+        
+        # Usar constructor de SheetsBaseTool
+        super().__init__(self.name, self.priority, sheets_service, default_config)
         
         # Alias para mejorar matching
         self.alias_map = {
@@ -95,10 +111,10 @@ class HorariosSecretariasTool:
 
     def _normalize_text(self, text: str) -> str:
         """Normaliza texto aplicando alias y limpieza mejorada."""
-        # Usar la función existente de text_utils
-        normalized = norm(text).lower()
+        # Usar función heredada de ModernBaseTool
+        normalized = self._normalize_query(text)
         
-        # Aplicar alias para mejorar matching
+        # Aplicar alias específicos de secretarías
         for alias, canonical in self.alias_map.items():
             normalized = normalized.replace(alias, canonical)
         
@@ -155,47 +171,19 @@ class HorariosSecretariasTool:
         
         return components
     
-    def _calculate_match_score(self, query_components: Dict[str, Any], secretaria_name: str) -> Tuple[float, Dict[str, Any]]:
-        """Calcula un score sofisticado de matching usando librerías modernas."""
-        name_normalized = self._normalize_text(secretaria_name)
+    def _calculate_match_score(self, query_components: Dict[str, Any], secretaria_name: str) -> Tuple[float, MatchDetails]:
+        """Calcula un score sofisticado de matching usando funciones heredadas."""
         query_normalized = query_components['normalized']
         
-        score = 0.0
-        match_details = {
-            'exact_match': False,
-            'partial_matches': [],
-            'component_matches': {},
-            'fuzzy_scores': {}
-        }
+        # Usar función heredada de ModernBaseTool
+        score, match_details = self._calculate_fuzzy_score(query_normalized, secretaria_name)
         
-        # 1. Coincidencia exacta (máximo score)
-        if query_normalized in name_normalized or name_normalized in query_normalized:
-            score = 1.0
-            match_details['exact_match'] = True
+        # Si hay coincidencia exacta, retornar inmediatamente
+        if match_details.exact_match:
             return score, match_details
         
-        # 2. Fuzzy matching moderno con rapidfuzz
-        ratio_score = fuzz.ratio(query_normalized, name_normalized) / 100.0
-        partial_score = fuzz.partial_ratio(query_normalized, name_normalized) / 100.0
-        token_sort_score = fuzz.token_sort_ratio(query_normalized, name_normalized) / 100.0
-        token_set_score = fuzz.token_set_ratio(query_normalized, name_normalized) / 100.0
-        
-        # Combinar scores de fuzzy matching con pesos optimizados
-        fuzzy_score = (ratio_score * 0.3 + partial_score * 0.25 + token_sort_score * 0.25 + token_set_score * 0.2)
-        
-        match_details['fuzzy_scores'] = {
-            'ratio': ratio_score,
-            'partial': partial_score,
-            'token_sort': token_sort_score,
-            'token_set': token_set_score,
-            'combined': fuzzy_score
-        }
-        
-        # Si el fuzzy score es muy alto, usarlo como base
-        if fuzzy_score > 0.7:
-            score = fuzzy_score
-        
         # 3. Matching por componentes específicos (mejorado)
+        name_normalized = self._normalize_text(secretaria_name)
         component_weights = {
             'area': 0.4,
             'catedra_num': 0.3,
@@ -210,27 +198,23 @@ class HorariosSecretariasTool:
                 component_value = query_components[component]
                 if component_value in name_normalized:
                     score += weight
-                    match_details['component_matches'][component] = True
+                    match_details.component_matches[component] = True
                 elif component == 'catedra_num':
                     # Buscar número de cátedra en el nombre
                     if f"catedra {component_value}" in name_normalized or f"cátedra {component_value}" in name_normalized:
                         score += weight
-                        match_details['component_matches'][component] = True
+                        match_details.component_matches[component] = True
         
         # 4. Fuzzy matching mejorado para keywords individuales
         if query_components['keywords']:
             keyword_scores = []
             for keyword in query_components['keywords']:
-                # Usar rapidfuzz para cada keyword
-                keyword_ratio = fuzz.ratio(keyword, name_normalized) / 100.0
-                keyword_partial = fuzz.partial_ratio(keyword, name_normalized) / 100.0
+                # Usar función heredada para cada keyword
+                keyword_score, _ = self._calculate_fuzzy_score(keyword, name_normalized)
                 
-                # Buscar la mejor coincidencia de la keyword
-                best_keyword_score = max(keyword_ratio, keyword_partial)
-                
-                if best_keyword_score > 0.6:  # Threshold más bajo para capturar más coincidencias
-                    keyword_scores.append(best_keyword_score)
-                    match_details['partial_matches'].append((keyword, best_keyword_score))
+                if keyword_score > 0.6:  # Threshold más bajo para capturar más coincidencias
+                    keyword_scores.append(keyword_score)
+                    match_details.keyword_matches.append(f"{keyword} (score: {keyword_score:.2f})")
             
             if keyword_scores:
                 avg_keyword_score = sum(keyword_scores) / len(keyword_scores)
@@ -247,8 +231,8 @@ class HorariosSecretariasTool:
                 score *= 0.3  # Penalización fuerte
         
         # 6. Si no hay score por componentes, usar fuzzy score como fallback
-        if score == 0.0 and fuzzy_score > 0.3:
-            score = fuzzy_score * 0.8  # Reducir un poco para dar prioridad a matches específicos
+        if score == 0.0 and match_details.fuzzy_scores.get('combined', 0) > 0.3:
+            score = match_details.fuzzy_scores['combined'] * 0.8  # Reducir un poco para dar prioridad a matches específicos
         
         return min(score, 1.0), match_details
     
@@ -267,34 +251,15 @@ class HorariosSecretariasTool:
     def accepts(self, score: float) -> bool:
         return score >= float(self.config.get('thresholds', {}).get('accept', 0.6))
 
-    @lru_cache(maxsize=1)
     def _fetch_sheet_data(self) -> List[List[str]]:
-        """Obtiene datos del sheet con manejo de errores y caché."""
-        try:
-            sid = self.config.get('spreadsheet_id')
-            if not sid:
-                raise SecretariaDataError("spreadsheet_id no configurado")
-
-            sheet_name = self.config.get('sheet_name', 'Hoja 1')
-            rng = self.config.get('ranges', {}).get('default', 'A:J')
-            a1 = f"'{sheet_name}'!{rng}"
-            
-            logger.info(f"Solicitando valores de la hoja de cálculo {sid} para el rango: {a1}")
-            values = self.sheets_service.get_sheet_values(sid, a1)
-            
-            if not values or len(values) < 2:
-                raise SecretariaDataError("No hay datos en el sheet o datos insuficientes")
-            
-            logger.info(f"Valores obtenidos exitosamente de {sid} para el rango {a1}. Total filas: {len(values)}")
-            return values[1:]  # Omitir header
-            
-        except Exception as e:
-            logger.error(f"Error obteniendo datos del sheet: {e}")
-            raise SecretariaDataError(f"Error accediendo al sheet: {e}")
-    
-    def _clear_cache(self):
-        """Limpia el caché de datos del sheet."""
-        self._fetch_sheet_data.cache_clear()
+        """Obtiene datos del sheet usando funcionalidad heredada."""
+        # Usar función heredada de SheetsBaseTool
+        values = super()._fetch_sheet_data()
+        
+        if not values or len(values) < 2:
+            raise SecretariaDataError("No hay datos en el sheet o datos insuficientes")
+        
+        return values[1:]  # Omitir header
 
     def _parse_query_intent(self, query: str) -> Dict[str, Any]:
         """Parsea la consulta para extraer la intención del usuario."""
